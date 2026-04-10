@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>个性化学习多智能体系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <div class="bg"></div>
+  <main class="page">
+    <header class="hero">
+      <h1>🌟 个性化学习多智能体系统</h1>
+      <p>星火大模型驱动 · 标签页交互 · 明亮活泼 UI</p>
+      <div class="user-bar">
+        <span>👤 {{ username }}</span>
+        <a class="logout-link" href="/logout">退出登录</a>
+      </div>
+      {% if notice %}
+      <p class="notice">{{ notice }}</p>
+      {% endif %}
+    </header>
+
+    <section class="layout">
+      <div class="left-col">
+        <section class="card form-card">
+          <h2>任务输入</h2>
+          <div class="grid">
+            <label>
+              课程名称 *
+              <input id="course" placeholder="如：人工智能导论" />
+            </label>
+            <label>
+              学习主题 *
+              <input id="topic" placeholder="如：机器学习基础" />
+            </label>
+            <label>
+              模型名称
+              <input id="model" value="4.0Ultra" />
+            </label>
+            <label>
+              学习进展（可选）
+              <input id="progress" placeholder="如：监督学习正确率70%" />
+            </label>
+          </div>
+
+          <label class="full">
+            画像对话输入 *
+            <textarea id="dialogue" rows="4" placeholder="如：我是大二计算机学生，线代薄弱，偏好图解与代码练习，每周可投入8小时..."></textarea>
+          </label>
+
+          <div class="actions">
+            <button id="generateBtn" class="btn-primary">🚀 生成个性化学习方案</button>
+            <span id="status" class="status">等待输入</span>
+          </div>
+        </section>
+
+        <section class="card">
+          <nav class="tabs">
+            <button class="tab active" data-tab="profile">学习画像</button>
+            <button class="tab" data-tab="resources">学习资源</button>
+            <button class="tab" data-tab="path">学习路径</button>
+            <button class="tab" data-tab="evaluate">学习评估</button>
+            <button class="tab" data-tab="tutor">智能辅导</button>
+          </nav>
+
+          <div class="tab-panels">
+            <section id="profile" class="panel active"></section>
+            <section id="resources" class="panel"></section>
+            <section id="path" class="panel"></section>
+            <section id="evaluate" class="panel"></section>
+            <section id="tutor" class="panel">
+              <div class="tutor-wrap">
+                <textarea id="question" rows="3" placeholder="输入学习中遇到的问题..."></textarea>
+                <button id="askBtn" class="btn-secondary">提问</button>
+                <article id="tutorAnswer" class="answer"></article>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+      <aside class="card history-card">
+        <h2>历史记录</h2>
+        <div id="historyList" class="history-list"></div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
