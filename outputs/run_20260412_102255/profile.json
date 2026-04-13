@@ -1,0 +1,22 @@
+{
+  "profile_version": "v1",
+  "profile": {
+    "major": "通信工程",
+    "course": "",
+    "learning_goals": [],
+    "knowledge_level": "掌握一定的线性代数等知识，具备通信工程专业基础入门水平",
+    "cognitive_style": "",
+    "weak_points": [],
+    "learning_pace": "",
+    "preferred_modalities": [],
+    "weekly_available_hours": 20
+  },
+  "confidence": 0.7,
+  "next_questions": [
+    "你当前正在学习的具体课程有哪些？",
+    "本学期你希望达成的核心学习目标是什么？",
+    "你更倾向于通过视频、教材、实践项目还是小组讨论来学习？",
+    "你在学习中感觉自己最薄弱的知识点或技能是什么？",
+    "你习惯每天集中学习，还是分散安排，每次学习时长大概多久？"
+  ]
+}

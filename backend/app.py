@@ -65,6 +65,7 @@ def login_action():
         return render_template("login.html", error="用户名或密码错误")
 
     session["username"] = username
+    session["progress_submitted_this_login"] = False
     if created:
         return redirect(url_for("index", notice="首次登录已创建账号"))
     return redirect(url_for("index"))
@@ -107,13 +108,14 @@ def generate():
     try:
         system = create_system(model=model)
         report = system.run(dialogue=dialogue, course=course, topic=topic, progress=progress)
-        output_path = system.save_report(report, run_name)
+        output_path, report_markdown = system.save_report(report, run_name)
         user_store.save_run(
             username=username,
             run_name=run_name,
             request_payload=payload,
             report=report,
             output_dir=str(output_path),
+            report_markdown=report_markdown,
         )
     except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
         return jsonify({"error": str(exc)}), 500
@@ -123,6 +125,7 @@ def generate():
             "run_name": run_name,
             "output_dir": str(output_path),
             "report": report,
+            "report_markdown": report_markdown,
         }
     )
 
@@ -167,8 +170,18 @@ def user_profile():
             "username": username,
             "runs": user_store.list_runs(username),
             "latest": user_store.get_latest_report(username),
+            "progress_logs": user_store.get_progress_logs(username, limit=10),
         }
     )
+
+
+@app.get("/api/projects")
+def list_projects():
+    username, err = require_login_json()
+    if err:
+        return err
+
+    return jsonify({"projects": user_store.list_runs(username)})
 
 
 @app.get("/api/user/run/<run_name>")
@@ -181,6 +194,106 @@ def user_run(run_name: str):
     if payload is None:
         return jsonify({"error": "未找到该历史记录"}), 404
     return jsonify(payload)
+
+
+@app.delete("/api/user/run/<run_name>")
+def delete_user_run(run_name: str):
+    username, err = require_login_json()
+    if err:
+        return err
+
+    ok = user_store.delete_run(username, run_name)
+    if not ok:
+        return jsonify({"error": "未找到该历史记录"}), 404
+
+    return jsonify({"message": "历史记录已删除", "run_name": run_name})
+
+
+@app.post("/api/progress/checkin")
+def progress_checkin():
+    username, err = require_login_json()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    checkin = payload.get("checkin")
+    if not isinstance(checkin, dict):
+        return jsonify({"error": "checkin 必须是对象类型"}), 400
+    responses = checkin.get("responses")
+    if not isinstance(responses, list) or not responses:
+        return jsonify({"error": "问卷答案不能为空，请先完成问卷填写"}), 400
+
+    run_name = str(payload.get("run_name", "")).strip()
+    latest = user_store.get_latest_report(username)
+    target_payload = None
+    if run_name:
+        target_payload = user_store.get_run(username, run_name)
+    elif isinstance(latest, dict):
+        target_payload = latest
+
+    if not isinstance(target_payload, dict):
+        return jsonify({"error": "未找到对应学习项目，请先选择已有项目"}), 400
+
+    report = target_payload.get("report")
+    if not isinstance(report, dict):
+        return jsonify({"error": "历史报告格式错误"}), 500
+
+    profile = report.get("profile")
+    path = report.get("learning_path")
+    if not isinstance(profile, dict) or not isinstance(path, dict):
+        return jsonify({"error": "历史报告缺少学习画像或学习路径"}), 500
+
+    req_payload = target_payload.get("request", {})
+    default_model = "4.0Ultra"
+    if isinstance(req_payload, dict):
+        default_model = str(req_payload.get("model", "4.0Ultra")).strip() or "4.0Ultra"
+    model = str(payload.get("model", default_model)).strip() or default_model
+
+    try:
+        system = create_system(model=model)
+        evaluation = system.evaluate_learning(progress_payload=checkin, profile=profile, path=path)
+    except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    report["evaluation"] = evaluation
+    report_markdown = system.build_report_markdown(report)
+    target_payload["report"] = report
+    target_payload["report_markdown"] = report_markdown
+    output_dir = str(target_payload.get("output_dir", "")).strip()
+    if output_dir:
+        system.persist_markdown_files(Path(output_dir), report_markdown)
+
+    progress_entry = {
+        "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "run_name": target_payload.get("run_name", ""),
+        "checkin": checkin,
+        "evaluation": evaluation,
+    }
+    latest_checkins = target_payload.get("progress_checkins", [])
+    if not isinstance(latest_checkins, list):
+        latest_checkins = []
+    latest_checkins.insert(0, progress_entry)
+    target_payload["progress_checkins"] = latest_checkins[:100]
+
+    target_run_name = str(target_payload.get("run_name", "")).strip()
+    if target_run_name:
+        user_store.update_run(username, target_run_name, target_payload)
+    if isinstance(latest, dict) and str(latest.get("run_name", "")).strip() == target_run_name:
+        user_store.update_latest_report(username, target_payload)
+    user_store.append_progress_log(username, progress_entry)
+    session["progress_submitted_this_login"] = True
+
+    return jsonify(
+        {
+            "message": "学习进度已提交，评估已更新",
+            "evaluation": evaluation,
+            "evaluation_md": report_markdown.get("evaluation_md", ""),
+            "report_markdown": report_markdown,
+            "run_name": target_run_name,
+        }
+    )
 
 
 if __name__ == "__main__":

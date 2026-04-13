@@ -1,148 +1,503 @@
 const state = {
+  mode: "", // "", "new", "existing"
   report: null,
-  topic: "",
+  reportMarkdown: {},
   runs: [],
+  selectedRunName: "",
+  existingProgressSubmitted: false,
+  topic: "",
+  progressFormTemplate: {},
+  progressAnswers: {},
+  progressCurrentIndex: 0,
 };
-
-function setStatus(text) {
-  document.getElementById("status").textContent = text;
-}
 
 function byId(id) {
   return document.getElementById(id);
 }
 
-function renderJSON(targetId, value) {
-  byId(targetId).innerHTML = `<pre class="json-box">${JSON.stringify(value, null, 2)}</pre>`;
+function setStatus(text) {
+  byId("status").textContent = text;
+}
+
+function setProjectStatus(text) {
+  byId("projectStatus").textContent = text;
+}
+
+function setVisible(id, visible) {
+  const el = byId(id);
+  if (!el) return;
+  if (visible) el.classList.remove("hidden-by-gate");
+  else el.classList.add("hidden-by-gate");
+}
+
+function showLoading(text = "正在请求星火 AI，请稍候...") {
+  byId("loadingText").textContent = text;
+  setVisible("loadingModal", true);
+}
+
+function hideLoading() {
+  setVisible("loadingModal", false);
+}
+
+async function withLoading(text, work) {
+  showLoading(text);
+  try {
+    return await work();
+  } finally {
+    hideLoading();
+  }
+}
+
+function escapeHtml(text) {
+  return String(text || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function renderMarkdown(targetId, markdown, empty = "暂无内容") {
+  const raw = (markdown || "").trim();
+  if (!raw) {
+    byId(targetId).innerHTML = `<p class="muted-text">${empty}</p>`;
+    return;
+  }
+  const html = window.marked ? marked.parse(raw) : `<pre>${escapeHtml(raw)}</pre>`;
+  byId(targetId).innerHTML = `<article class="resource-item"><div>${html}</div></article>`;
+}
+
+function objectToMarkdown(value, level = 0) {
+  if (value === null || value === undefined) return "暂无";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    if (!value.length) return "暂无";
+    return value
+      .map((item) => {
+        if (typeof item === "object" && item !== null) return `- \n${objectToMarkdown(item, level + 1)}`;
+        return `- ${String(item)}`;
+      })
+      .join("\n");
+  }
+  const entries = Object.entries(value);
+  if (!entries.length) return "暂无";
+  const indent = "  ".repeat(level);
+  return entries
+    .map(([key, item]) => {
+      if (typeof item === "object" && item !== null) return `${indent}- **${key}**:\n${objectToMarkdown(item, level + 1)}`;
+      return `${indent}- **${key}**: ${String(item ?? "")}`;
+    })
+    .join("\n");
+}
+
+function buildFallbackMarkdown(title, value) {
+  return `## ${title}\n\n${objectToMarkdown(value)}`;
+}
+
+function buildFallbackReportMarkdown(report) {
+  return [
+    buildFallbackMarkdown("学习画像", report?.profile || {}),
+    "## 学习资源",
+    ...(Object.entries(report?.resources || {}).map(([name, content]) => `### ${name}\n\n${content || ""}`)),
+    buildFallbackMarkdown("学习路径", report?.learning_path || {}),
+    buildFallbackMarkdown("学习进度填写表单", report?.progress_form_template || {}),
+    buildFallbackMarkdown("学习评估", report?.evaluation || { summary: "暂无学习评估。" }),
+  ].join("\n\n");
 }
 
 function renderResources(resources) {
   const container = byId("resources");
   const entries = Object.entries(resources || {});
   if (!entries.length) {
-    container.innerHTML = "<p>暂无资源</p>";
+    container.innerHTML = "<p class='muted-text'>暂无资源</p>";
     return;
   }
   container.innerHTML = entries
     .map(([name, content]) => {
-      const html = window.marked ? marked.parse(content || "") : `<pre>${content || ""}</pre>`;
+      const html = window.marked ? marked.parse(content || "") : `<pre>${escapeHtml(content || "")}</pre>`;
       return `<article class="resource-item"><h3>${name}</h3><div>${html}</div></article>`;
     })
     .join("");
 }
 
-function renderReport(report) {
-  state.report = report;
-  renderJSON("profile", report.profile || {});
+function renderReport(report, reportMarkdown = {}) {
+  state.report = report || {};
+  state.reportMarkdown = reportMarkdown || {};
+  renderMarkdown("profile", reportMarkdown.profile_md || buildFallbackMarkdown("学习画像", report.profile || {}), "暂无学习画像");
+  renderMarkdown("path", reportMarkdown.learning_path_md || buildFallbackMarkdown("学习路径", report.learning_path || {}), "暂无学习路径");
+  renderMarkdown(
+    "evaluate",
+    reportMarkdown.evaluation_md || buildFallbackMarkdown("学习评估", report.evaluation || { summary: "暂无学习评估。" }),
+    "暂无学习评估",
+  );
   renderResources(report.resources || {});
-  renderJSON("path", report.learning_path || {});
-  renderJSON("evaluate", report.evaluation || { note: "本次未提供 progress，未生成评估。" });
+  renderMarkdown("aiMarkdown", reportMarkdown.full_report_md || buildFallbackReportMarkdown(report), "暂无 AI 返回内容");
+}
+
+function renderProjectOptions(runs) {
+  state.runs = runs || [];
+  const select = byId("projectSelect");
+  if (!state.runs.length) {
+    select.innerHTML = `<option value="">暂无已有学习项目</option>`;
+    return;
+  }
+  select.innerHTML = [
+    `<option value="">请选择已有学习项目</option>`,
+    ...state.runs.map(
+      (item) =>
+        `<option value="${item.run_name}">${escapeHtml(item.course || "未命名课程")} · ${escapeHtml(item.topic || "未命名主题")} (${escapeHtml(item.created_at || item.run_name)})</option>`,
+    ),
+  ].join("");
 }
 
 function renderHistory(runs) {
-  state.runs = runs || [];
   const el = byId("historyList");
-  if (!state.runs.length) {
+  if (!runs.length) {
     el.innerHTML = "<p class='meta'>暂无历史记录</p>";
     return;
   }
-
-  el.innerHTML = state.runs
+  el.innerHTML = runs
     .map(
       (item) => `
       <article class="history-item" data-run="${item.run_name}">
-        <div class="title">${item.course || "未命名课程"} · ${item.topic || "未命名主题"}</div>
-        <div class="meta">${item.created_at || ""}</div>
+        <div class="history-main">
+          <div class="title">${item.course || "未命名课程"} · ${item.topic || "未命名主题"}</div>
+          <div class="meta">${item.created_at || ""}</div>
+        </div>
+        <button class="history-delete-btn" data-run="${item.run_name}" type="button">删除</button>
       </article>`,
     )
     .join("");
 
-  document.querySelectorAll(".history-item").forEach((node, index) => {
+  document.querySelectorAll(".history-item").forEach((node) => {
     node.addEventListener("click", async () => {
-      const run = state.runs[index];
-      try {
-        const resp = await fetch(`/api/user/run/${encodeURIComponent(run.run_name)}`);
-        const data = await resp.json();
-        if (!resp.ok) {
-          throw new Error(data.error || "加载历史记录失败");
-        }
-        const req = data.request || {};
-        byId("course").value = req.course || "";
-        byId("topic").value = req.topic || "";
-        byId("dialogue").value = req.dialogue || "";
-        byId("progress").value = req.progress || "";
-        byId("model").value = req.model || "4.0Ultra";
-        state.topic = req.topic || "";
-        if (data.report) {
-          renderReport(data.report);
-        }
-        setStatus(`已加载历史任务：${run.run_name}`);
-      } catch (err) {
-        setStatus(`历史记录加载失败：${err.message}`);
-      }
+      const runName = node.getAttribute("data-run") || "";
+      byId("projectSelect").value = runName;
+      await chooseExistingProject();
+    });
+  });
+
+  document.querySelectorAll(".history-delete-btn").forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const runName = node.getAttribute("data-run") || "";
+      if (!runName) return;
+      const ok = window.confirm("确认删除该历史记录吗？删除后不可恢复。");
+      if (!ok) return;
+      await deleteHistory(runName);
     });
   });
 }
 
-async function loadUserProfile() {
-  try {
-    const resp = await fetch("/api/user/profile");
-    const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error(data.error || "加载用户信息失败");
-    }
-    renderHistory(data.runs || []);
-    if (data.latest && data.latest.report) {
-      renderReport(data.latest.report);
-      const req = data.latest.request || {};
-      byId("course").value = req.course || "";
-      byId("topic").value = req.topic || "";
-      byId("dialogue").value = req.dialogue || "";
-      byId("progress").value = req.progress || "";
-      byId("model").value = req.model || "4.0Ultra";
-      state.topic = req.topic || "";
-      setStatus("已加载上次保存的数据");
-    }
-  } catch (err) {
-    setStatus(`用户数据加载失败：${err.message}`);
+function saveCurrentProgressAnswer() {
+  const questions = state.progressFormTemplate?.questions || [];
+  if (!questions.length) return;
+
+  const current = Math.min(Math.max(state.progressCurrentIndex, 0), questions.length - 1);
+  const q = questions[current];
+  const qid = q.id || `q${current + 1}`;
+  const qtype = q.type || "text";
+
+  if (qtype === "single_choice") {
+    const checked = document.querySelector(".progress-answer-single:checked");
+    state.progressAnswers[qid] = checked ? checked.value : "";
+    return;
   }
+  if (qtype === "multi_choice") {
+    const values = [];
+    document.querySelectorAll(".progress-answer-multi").forEach((el) => {
+      if (el.checked) values.push(el.value);
+    });
+    state.progressAnswers[qid] = values;
+    return;
+  }
+  if (qtype === "scale") {
+    const checked = document.querySelector(".progress-answer-scale:checked");
+    state.progressAnswers[qid] = checked ? checked.value : "";
+    return;
+  }
+  state.progressAnswers[qid] = (byId("progressTextAnswer")?.value || "").trim();
+}
+
+function renderProgressQuestion() {
+  const wrap = byId("progressFormWrap");
+  const questions = state.progressFormTemplate?.questions || [];
+  if (!questions.length) {
+    wrap.innerHTML = "<p class='muted-text'>该项目暂无进度表单。</p>";
+    return;
+  }
+
+  const current = Math.min(Math.max(state.progressCurrentIndex, 0), questions.length - 1);
+  state.progressCurrentIndex = current;
+  const question = questions[current];
+  const qid = question.id || `q${current + 1}`;
+  const qtype = question.type || "text";
+  const requiredMark = question.required ? "（必填）" : "（选填）";
+  const old = state.progressAnswers[qid];
+
+  let answerHtml = "";
+  if (qtype === "single_choice") {
+    const options = (question.options || [])
+      .map(
+        (opt, idx) => `
+        <label><input type="radio" class="progress-answer-single" name="single_${escapeHtml(qid)}" value="${escapeHtml(opt)}" ${old === opt ? "checked" : ""} /> ${String.fromCharCode(65 + idx)}. ${escapeHtml(opt)}</label>`,
+      )
+      .join("");
+    answerHtml = `<div class="progress-options-wrap">${options}</div>`;
+  } else if (qtype === "multi_choice") {
+    const selected = Array.isArray(old) ? old : [];
+    const options = (question.options || [])
+      .map(
+        (opt, idx) => `
+        <label><input type="checkbox" class="progress-answer-multi" value="${escapeHtml(opt)}" ${selected.includes(opt) ? "checked" : ""} /> ${String.fromCharCode(65 + idx)}. ${escapeHtml(opt)}</label>`,
+      )
+      .join("");
+    answerHtml = `<div class="progress-options-wrap">${options}</div>`;
+  } else if (qtype === "scale") {
+    const options = (question.options && question.options.length ? question.options : ["1", "2", "3", "4", "5"])
+      .map(
+        (opt) =>
+          `<label><input type="radio" class="progress-answer-scale" name="scale_${escapeHtml(qid)}" value="${escapeHtml(opt)}" ${String(old) === String(opt) ? "checked" : ""} /> ${escapeHtml(opt)}</label>`,
+      )
+      .join("");
+    answerHtml = `<div class="progress-scale-options">${options}</div>`;
+  } else {
+    answerHtml = `<textarea id="progressTextAnswer" rows="3" placeholder="请输入你的回答">${escapeHtml(old || "")}</textarea>`;
+  }
+
+  wrap.innerHTML = `
+    <section class="progress-stage">
+      <div class="muted-text">第 ${current + 1} / ${questions.length} 题</div>
+      <h3 class="progress-question-title">Q${current + 1}. ${escapeHtml(question.question || "未命名问题")} ${requiredMark}</h3>
+      ${answerHtml}
+      <div class="progress-nav">
+        <button id="progressPrevBtn" class="btn-secondary" type="button" ${current === 0 ? "disabled" : ""}>上一题</button>
+        <button id="progressNextBtn" class="btn-primary" type="button" ${current === questions.length - 1 ? "disabled" : ""}>下一题</button>
+      </div>
+    </section>
+  `;
+
+  byId("progressPrevBtn").addEventListener("click", () => {
+    saveCurrentProgressAnswer();
+    state.progressCurrentIndex = Math.max(0, state.progressCurrentIndex - 1);
+    renderProgressQuestion();
+  });
+
+  byId("progressNextBtn").addEventListener("click", () => {
+    saveCurrentProgressAnswer();
+    state.progressCurrentIndex = Math.min(questions.length - 1, state.progressCurrentIndex + 1);
+    renderProgressQuestion();
+  });
+}
+
+function renderProgressForm(template = {}, latestCheckin = null) {
+  state.progressFormTemplate = template || {};
+  state.progressCurrentIndex = 0;
+  state.progressAnswers = {};
+  (latestCheckin?.responses || []).forEach((item) => {
+    state.progressAnswers[item.question_id] = item.answer;
+  });
+  renderProgressQuestion();
+}
+
+function collectProgressFormData() {
+  saveCurrentProgressAnswer();
+  const responses = [];
+  const requiredErrors = [];
+  const questions = state.progressFormTemplate?.questions || [];
+
+  questions.forEach((q, idx) => {
+    const qid = q.id || `q${idx + 1}`;
+    const qtype = q.type || "text";
+    const answer = state.progressAnswers[qid];
+    const empty =
+      answer === undefined ||
+      answer === null ||
+      (typeof answer === "string" && answer.trim() === "") ||
+      (Array.isArray(answer) && answer.length === 0);
+    if (q.required && empty) requiredErrors.push(qid);
+    responses.push({ question_id: qid, type: qtype, answer: answer ?? (qtype === "multi_choice" ? [] : "") });
+  });
+
+  return {
+    valid: requiredErrors.length === 0,
+    missing: requiredErrors,
+    payload: {
+      topic: state.topic,
+      responses,
+    },
+  };
+}
+
+function refreshModeUI() {
+  setVisible("projectCard", true);
+  if (!state.mode) {
+    setVisible("taskCard", false);
+    setVisible("progressCard", false);
+    setVisible("resultCard", false);
+    setVisible("historyCard", false);
+    return;
+  }
+  if (state.mode === "new") {
+    setVisible("taskCard", true);
+    setVisible("progressCard", false);
+    setVisible("resultCard", true);
+    setVisible("historyCard", true);
+    return;
+  }
+  // existing mode
+  setVisible("taskCard", false);
+  setVisible("progressCard", true);
+  setVisible("resultCard", state.existingProgressSubmitted);
+  setVisible("historyCard", state.existingProgressSubmitted);
+}
+
+async function loadProjects() {
+  const resp = await fetch("/api/projects");
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || "加载学习项目失败");
+  renderProjectOptions(data.projects || []);
+  renderHistory(data.projects || []);
+}
+
+async function chooseExistingProject() {
+  const runName = byId("projectSelect").value.trim();
+  if (!runName) {
+    setProjectStatus("请先从下拉框选择已有学习项目。");
+    return;
+  }
+  const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`);
+  const data = await resp.json();
+  if (!resp.ok) {
+    setProjectStatus(data.error || "加载已有项目失败");
+    return;
+  }
+  const req = data.request || {};
+  byId("course").value = req.course || "";
+  byId("topic").value = req.topic || "";
+  byId("dialogue").value = req.dialogue || "";
+  byId("model").value = req.model || "4.0Ultra";
+  state.topic = req.topic || "";
+  state.selectedRunName = runName;
+  state.mode = "existing";
+  state.existingProgressSubmitted = false;
+  renderReport(data.report || {}, data.report_markdown || {});
+  renderProgressForm(data.report?.progress_form_template || {}, data.progress_checkins?.[0]?.checkin || null);
+  byId("progressNotice").textContent = "请先填写学习进度并提交，提交后显示该项目完整学习内容。";
+  refreshModeUI();
+  setProjectStatus(`已选择已有项目：${runName}`);
+}
+
+function chooseNewProject() {
+  state.mode = "new";
+  state.selectedRunName = "";
+  state.existingProgressSubmitted = true;
+  state.progressFormTemplate = {};
+  state.progressAnswers = {};
+  state.progressCurrentIndex = 0;
+  byId("course").value = "";
+  byId("topic").value = "";
+  byId("dialogue").value = "";
+  byId("question").value = "";
+  byId("tutorAnswer").innerHTML = "";
+  state.report = null;
+  state.reportMarkdown = {};
+  byId("profile").innerHTML = "";
+  byId("path").innerHTML = "";
+  byId("evaluate").innerHTML = "";
+  byId("resources").innerHTML = "";
+  byId("aiMarkdown").innerHTML = "";
+  refreshModeUI();
+  setProjectStatus("已进入新建学习项目模式，请填写任务输入后生成学习画像。");
 }
 
 async function generate() {
+  if (state.mode !== "new") {
+    setStatus("请先点击“新建学习项目”。");
+    return;
+  }
   const payload = {
     course: byId("course").value.trim(),
     topic: byId("topic").value.trim(),
     dialogue: byId("dialogue").value.trim(),
-    progress: byId("progress").value.trim(),
+    progress: "",
     model: byId("model").value.trim() || "4.0Ultra",
   };
   if (!payload.course || !payload.topic || !payload.dialogue) {
     setStatus("请填写必填项：课程、主题、画像对话");
     return;
   }
-  setStatus("正在真实调用星火大模型，请稍候...");
   state.topic = payload.topic;
-  try {
+  setStatus("正在生成学习方案...");
+  const data = await withLoading("正在上传请求到星火 AI 并生成学习方案...", async () => {
     const resp = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error(data.error || "生成失败");
-    }
-    renderReport(data.report);
-    await loadUserProfile();
-    setStatus(`生成完成，结果已保存：${data.output_dir}`);
-  } catch (err) {
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || "生成失败");
+    return result;
+  }).catch((err) => {
     setStatus(`错误：${err.message}`);
+    return null;
+  });
+  if (!data) return;
+  renderReport(data.report || {}, data.report_markdown || {});
+  setStatus(`生成完成：${data.output_dir}`);
+  await loadProjects();
+}
+
+async function submitProgress() {
+  if (state.mode !== "existing") {
+    setStatus("请先选择“已有学习项目”。");
+    return;
   }
+  if (!state.selectedRunName) {
+    setStatus("未检测到学习项目，请重新选择。");
+    return;
+  }
+  const checkin = collectProgressFormData();
+  if (!checkin.valid) {
+    setStatus("请完成所有必填题目后再提交。");
+    return;
+  }
+  setStatus("正在提交学习进度并调用星火评估...");
+  const data = await withLoading("正在上传学习进度到星火 AI 并等待评估...", async () => {
+    const resp = await fetch("/api/progress/checkin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        run_name: state.selectedRunName,
+        model: byId("model").value.trim() || "4.0Ultra",
+        checkin: checkin.payload,
+      }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || "提交失败");
+    return result;
+  }).catch((err) => {
+    setStatus(`学习进度提交失败：${err.message}`);
+    return null;
+  });
+  if (!data) return;
+
+  if (state.report) {
+    state.report.evaluation = data.evaluation || {};
+    state.reportMarkdown = data.report_markdown || state.reportMarkdown;
+    renderReport(state.report, state.reportMarkdown);
+  }
+  state.existingProgressSubmitted = true;
+  byId("progressNotice").textContent = "学习进度已提交并完成评估，可查看完整学习内容。";
+  refreshModeUI();
+  setStatus("学习进度已提交，学习评估已更新。");
 }
 
 async function askTutor() {
   if (!state.report || !state.report.profile) {
-    byId("tutorAnswer").textContent = "请先生成学习方案，再进行智能辅导。";
+    byId("tutorAnswer").textContent = "请先生成或加载学习方案。";
+    return;
+  }
+  if (state.mode === "existing" && !state.existingProgressSubmitted) {
+    byId("tutorAnswer").textContent = "请先提交该项目学习进度，再进行智能辅导。";
     return;
   }
   const question = byId("question").value.trim();
@@ -151,8 +506,7 @@ async function askTutor() {
     return;
   }
 
-  byId("tutorAnswer").textContent = "正在思考中...";
-  try {
+  const data = await withLoading("正在上传问题到星火 AI 并生成辅导答案...", async () => {
     const resp = await fetch("/api/tutor", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -163,15 +517,35 @@ async function askTutor() {
         profile: state.report.profile,
       }),
     });
-    const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error(data.error || "辅导失败");
-    }
-    const html = window.marked ? marked.parse(data.answer || "") : data.answer || "";
-    byId("tutorAnswer").innerHTML = html;
-  } catch (err) {
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || "辅导失败");
+    return result;
+  }).catch((err) => {
     byId("tutorAnswer").textContent = `错误：${err.message}`;
+    return null;
+  });
+  if (!data) return;
+
+  byId("tutorAnswer").innerHTML = window.marked ? marked.parse(data.answer || "") : escapeHtml(data.answer || "");
+}
+
+async function deleteHistory(runName) {
+  const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`, { method: "DELETE" });
+  const data = await resp.json();
+  if (!resp.ok) {
+    setProjectStatus(data.error || "删除失败");
+    return;
   }
+  if (state.selectedRunName === runName) {
+    state.selectedRunName = "";
+    state.mode = "";
+    state.existingProgressSubmitted = false;
+    state.report = null;
+    state.reportMarkdown = {};
+    refreshModeUI();
+  }
+  await loadProjects();
+  setProjectStatus(`已删除历史记录：${runName}`);
 }
 
 function initTabs() {
@@ -182,17 +556,25 @@ function initTabs() {
       tabs.forEach((t) => t.classList.remove("active"));
       panels.forEach((p) => p.classList.remove("active"));
       tab.classList.add("active");
-      const key = tab.dataset.tab;
-      byId(key).classList.add("active");
+      byId(tab.dataset.tab).classList.add("active");
     });
   });
 }
 
-function boot() {
+async function boot() {
   initTabs();
+  byId("chooseExistingBtn").addEventListener("click", chooseExistingProject);
+  byId("chooseNewBtn").addEventListener("click", chooseNewProject);
   byId("generateBtn").addEventListener("click", generate);
+  byId("submitProgressBtn").addEventListener("click", submitProgress);
   byId("askBtn").addEventListener("click", askTutor);
-  loadUserProfile();
+  refreshModeUI();
+  try {
+    await loadProjects();
+    setProjectStatus("请选择已有项目或新建学习项目。");
+  } catch (err) {
+    setProjectStatus(`项目加载失败：${err.message}`);
+  }
 }
 
 boot();

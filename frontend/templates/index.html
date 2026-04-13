@@ -23,7 +23,26 @@
 
     <section class="layout">
       <div class="left-col">
-        <section class="card form-card">
+        <section id="projectCard" class="card">
+          <h2>学习项目选择</h2>
+          <div class="grid">
+            <label>
+              已有学习项目
+              <select id="projectSelect"></select>
+            </label>
+            <label>
+              选择操作
+              <input id="projectHint" value="先选择“已有项目”或“新建项目”" disabled />
+            </label>
+          </div>
+          <div class="actions">
+            <button id="chooseExistingBtn" class="btn-secondary">使用已有项目并填写进度</button>
+            <button id="chooseNewBtn" class="btn-primary">新建学习项目</button>
+            <span id="projectStatus" class="status">请先选择学习项目</span>
+          </div>
+        </section>
+
+        <section id="taskCard" class="card form-card">
           <h2>任务输入</h2>
           <div class="grid">
             <label>
@@ -39,8 +58,8 @@
               <input id="model" value="4.0Ultra" />
             </label>
             <label>
-              学习进展（可选）
-              <input id="progress" placeholder="如：监督学习正确率70%" />
+              学习进度填写
+              <input id="progressHint" value="请在下方“学习进度填写”模块提交（每次登录至少1次）" disabled />
             </label>
           </div>
 
@@ -55,9 +74,19 @@
           </div>
         </section>
 
-        <section class="card">
+        <section id="progressCard" class="card progress-card">
+          <h2>学习进度填写（每次登录至少 1 次）</h2>
+          <div id="progressNotice" class="status">尚未加载进度表单</div>
+          <div id="progressFormWrap" class="progress-form-wrap"></div>
+          <div class="actions">
+            <button id="submitProgressBtn" class="btn-secondary">📝 提交学习进度并更新评估</button>
+          </div>
+        </section>
+
+        <section id="resultCard" class="card">
           <nav class="tabs">
             <button class="tab active" data-tab="profile">学习画像</button>
+            <button class="tab" data-tab="aiMarkdown">AI返回(MD)</button>
             <button class="tab" data-tab="resources">学习资源</button>
             <button class="tab" data-tab="path">学习路径</button>
             <button class="tab" data-tab="evaluate">学习评估</button>
@@ -66,6 +95,7 @@
 
           <div class="tab-panels">
             <section id="profile" class="panel active"></section>
+            <section id="aiMarkdown" class="panel"></section>
             <section id="resources" class="panel"></section>
             <section id="path" class="panel"></section>
             <section id="evaluate" class="panel"></section>
@@ -79,12 +109,19 @@
           </div>
         </section>
       </div>
-      <aside class="card history-card">
+      <aside id="historyCard" class="card history-card">
         <h2>历史记录</h2>
         <div id="historyList" class="history-list"></div>
       </aside>
     </section>
   </main>
+
+  <div id="loadingModal" class="loading-modal hidden-by-gate" aria-live="polite" aria-busy="true">
+    <div class="loading-modal-content">
+      <div class="loading-spinner"></div>
+      <p id="loadingText">正在请求星火 AI，请稍候...</p>
+    </div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>

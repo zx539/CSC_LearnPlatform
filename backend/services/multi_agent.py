@@ -1,7 +1,7 @@
 import json
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from .spark_client import SparkClient
 
@@ -19,6 +19,14 @@ def extract_json_block(text: str) -> Dict:
     return json.loads(match.group(0))
 
 
+def _stringify(value: Any) -> str:
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
+
+
 class MultiAgentLearningSystem:
     REQUIRED_RESOURCE_TYPES = [
         "课程讲解文档",
@@ -26,6 +34,7 @@ class MultiAgentLearningSystem:
         "分层练习题(含答案与解析)",
         "拓展阅读材料",
         "代码实操案例",
+        "视频学习资料",
     ]
 
     def __init__(self, spark: SparkClient, kb_dir: str, output_dir: str):
@@ -87,11 +96,18 @@ class MultiAgentLearningSystem:
             "禁止编造不确定事实，不确定信息用【需核验】标记。"
             "内容必须个性化，显式贴合学生画像。"
         )
+        extra_requirement = ""
+        if resource_type == "视频学习资料":
+            extra_requirement = (
+                "请输出Markdown格式，至少给出5条视频学习资料，优先可公开访问。"
+                "每条需包含：标题、平台、链接、适合人群、建议观看顺序与时长。"
+            )
         user_prompt = (
             f"资源类型: {resource_type}\n"
             f"学习主题: {topic}\n"
             f"学生画像: {json.dumps(profile, ensure_ascii=False)}\n"
             f"课程知识库节选:\n{kb_text}\n\n"
+            f"{extra_requirement}\n"
             "请直接输出最终资源内容。"
         )
         return self.spark.chat(
@@ -99,12 +115,270 @@ class MultiAgentLearningSystem:
             temperature=0.5,
         )
 
+    def build_report_markdown(self, report: Dict) -> Dict[str, str]:
+        profile_md = self._profile_to_markdown(report.get("profile", {}))
+        path_md = self._learning_path_to_markdown(report.get("learning_path", {}))
+        progress_form_md = self._progress_form_to_markdown(report.get("progress_form_template", {}))
+        evaluation_obj = report.get("evaluation", {"summary": "本次未提供学习进度，暂未生成评估。"})
+        evaluation_md = self._evaluation_to_markdown(evaluation_obj)
+
+        resource_blocks: List[str] = []
+        for name, content in report.get("resources", {}).items():
+            resource_blocks.append(f"## 资源：{name}\n\n{content}\n")
+        resources_md = "\n".join(resource_blocks)
+
+        full_report_md = "\n\n".join([profile_md, resources_md, path_md, progress_form_md, evaluation_md]).strip() + "\n"
+        return {
+            "profile_md": profile_md,
+            "resources_md": resources_md,
+            "learning_path_md": path_md,
+            "progress_form_md": progress_form_md,
+            "evaluation_md": evaluation_md,
+            "full_report_md": full_report_md,
+        }
+
+    def _profile_to_markdown(self, profile_data: Dict) -> str:
+        profile = profile_data.get("profile", {})
+        goals = profile.get("learning_goals", []) or []
+        weak_points = profile.get("weak_points", []) or []
+        modalities = profile.get("preferred_modalities", []) or []
+        next_questions = profile_data.get("next_questions", []) or []
+        return (
+            "## 学习画像\n\n"
+            f"- **专业/课程**：{_stringify(profile.get('major', ''))} / {_stringify(profile.get('course', ''))}\n"
+            f"- **知识基础**：{_stringify(profile.get('knowledge_level', ''))}\n"
+            f"- **认知风格**：{_stringify(profile.get('cognitive_style', ''))}\n"
+            f"- **学习节奏**：{_stringify(profile.get('learning_pace', ''))}\n"
+            f"- **每周可投入时间**：{_stringify(profile.get('weekly_available_hours', ''))} 小时\n\n"
+            f"### 学习目标\n{self._list_to_markdown(goals)}\n\n"
+            f"### 薄弱点\n{self._list_to_markdown(weak_points)}\n\n"
+            f"### 偏好资源类型\n{self._list_to_markdown(modalities)}\n\n"
+            f"### 画像置信度\n- **置信度**：{_stringify(profile_data.get('confidence', ''))}\n\n"
+            f"### 后续澄清问题\n{self._list_to_markdown(next_questions)}\n"
+        )
+
+    def _learning_path_to_markdown(self, path: Dict) -> str:
+        stages = path.get("stages", []) or []
+        stage_blocks: List[str] = []
+        for stage in stages:
+            stage_blocks.append(
+                f"### 阶段 {stage.get('stage_no', '')}：{_stringify(stage.get('goal', ''))}\n"
+                f"- **行动项**：{self._inline_list(stage.get('actions', []))}\n"
+                f"- **推荐资源**：{self._inline_list(stage.get('recommended_resources', []))}\n"
+                f"- **检查点**：{_stringify(stage.get('checkpoint', ''))}\n"
+            )
+        push = path.get("push_strategy", {})
+        return (
+            "## 学习路径\n\n"
+            f"- **路径名称**：{_stringify(path.get('path_name', ''))}\n"
+            f"- **总阶段数**：{_stringify(path.get('total_stages', 0))}\n\n"
+            f"{''.join(stage_blocks) if stage_blocks else '- 暂无阶段信息'}\n"
+            "### 推送策略\n"
+            f"- **日常推送规则**：{self._inline_list(push.get('daily_push_rules', []))}\n"
+            f"- **自适应规则**：{self._inline_list(push.get('adaptive_rules', []))}\n"
+        )
+
+    def _progress_form_to_markdown(self, form_template: Dict) -> str:
+        questions = form_template.get("questions", []) or []
+        blocks: List[str] = []
+        for idx, item in enumerate(questions, start=1):
+            q_type = _stringify(item.get("type", "text"))
+            required_text = "必填" if bool(item.get("required", True)) else "选填"
+            options = item.get("options", []) or []
+            option_text = ""
+            if options:
+                option_lines = "\n".join([f"  - {opt}" for opt in options])
+                option_text = f"\n- **可选项**：\n{option_lines}"
+            blocks.append(
+                f"### Q{idx}. {_stringify(item.get('question', ''))}\n"
+                f"- **题型**：{q_type}\n"
+                f"- **是否必填**：{required_text}\n"
+                f"- **评估维度**：{_stringify(item.get('dimension', '学习进度'))}"
+                f"{option_text}\n"
+            )
+        return (
+            f"## {_stringify(form_template.get('form_title', '学习进度问卷'))}\n\n"
+            f"{_stringify(form_template.get('instructions', '请按真实学习情况作答，提交后将用于评估。'))}\n\n"
+            f"{''.join(blocks) if blocks else '- 暂无可用问卷题目，请先生成学习路径。'}\n"
+        )
+
+    def _evaluation_to_markdown(self, evaluation: Dict) -> str:
+        stage_progress = evaluation.get("stage_progress", []) or []
+        stage_lines: List[str] = []
+        for item in stage_progress:
+            stage_lines.append(
+                f"### 阶段 {item.get('stage_no', '')}：{_stringify(item.get('goal', ''))}\n"
+                f"- **计划完成度**：{_stringify(item.get('completion_rate', ''))}%\n"
+                f"- **掌握质量**：{_stringify(item.get('quality_score', ''))}/100\n"
+                f"- **关键问题**：{self._inline_list(item.get('issues', []))}\n"
+                f"- **改进动作**：{self._inline_list(item.get('next_actions', []))}\n"
+            )
+        efficiency = evaluation.get("study_efficiency", {})
+        return (
+            "## 学习评估\n\n"
+            f"- **总体结论**：{_stringify(evaluation.get('summary', ''))}\n"
+            f"- **综合评分**：{_stringify(evaluation.get('overall_score', ''))}/100\n\n"
+            "### 分阶段评估\n"
+            f"{''.join(stage_lines) if stage_lines else '- 暂无分阶段评估数据'}\n"
+            "### 效率分析\n"
+            f"- **计划时长**：{_stringify(efficiency.get('planned_hours', ''))} h\n"
+            f"- **实际时长**：{_stringify(efficiency.get('actual_hours', ''))} h\n"
+            f"- **偏差说明**：{_stringify(efficiency.get('deviation_note', ''))}\n\n"
+            f"### 风险提醒\n{self._list_to_markdown(evaluation.get('risk_alerts', []))}\n\n"
+            f"### 下阶段目标\n{self._list_to_markdown(evaluation.get('next_week_targets', []))}\n"
+        )
+
+    def _list_to_markdown(self, values: List[Any]) -> str:
+        if not values:
+            return "- 暂无"
+        return "\n".join(f"- { _stringify(item) }" for item in values)
+
+    def _inline_list(self, values: List[Any]) -> str:
+        if not values:
+            return "暂无"
+        return "；".join(_stringify(item) for item in values)
+
     def generate_resources(self, topic: str, profile: Dict, course: str) -> Dict[str, str]:
         kb_text = self._read_knowledge_base(course)
         results: Dict[str, str] = {}
         for item in self.REQUIRED_RESOURCE_TYPES:
             results[item] = self._generate_single_resource(item, topic, profile, kb_text)
         return results
+
+    def _normalize_question_type(self, raw_type: str) -> str:
+        t = (raw_type or "").strip().lower()
+        if t in {"single", "single_choice", "radio", "单选"}:
+            return "single_choice"
+        if t in {"multiple", "multi_choice", "checkbox", "多选"}:
+            return "multi_choice"
+        if t in {"scale", "rating", "量表"}:
+            return "scale"
+        return "text"
+
+    def _default_progress_questions(self, path: Dict) -> List[Dict[str, Any]]:
+        stages = path.get("stages", []) or []
+        questions: List[Dict[str, Any]] = []
+        for stage in stages[:4]:
+            stage_no = _stringify(stage.get("stage_no", ""))
+            goal = _stringify(stage.get("goal", "该阶段目标"))
+            questions.append(
+                {
+                    "id": f"stage_{stage_no}_completion",
+                    "question": f"你在“阶段{stage_no}：{goal}”的完成度如何？",
+                    "type": "single_choice",
+                    "options": ["0-25%", "26-50%", "51-75%", "76-100%"],
+                    "required": True,
+                    "dimension": "阶段完成度",
+                }
+            )
+            questions.append(
+                {
+                    "id": f"stage_{stage_no}_difficulty",
+                    "question": f"该阶段的学习难度体感如何？",
+                    "type": "scale",
+                    "options": ["1", "2", "3", "4", "5"],
+                    "required": True,
+                    "dimension": "学习难度",
+                }
+            )
+        questions.extend(
+            [
+                {
+                    "id": "today_hours",
+                    "question": "你今天投入学习的总时长大约是多少？",
+                    "type": "single_choice",
+                    "options": ["0-0.5小时", "0.5-1小时", "1-2小时", "2小时以上"],
+                    "required": True,
+                    "dimension": "学习投入",
+                },
+                {
+                    "id": "main_blockers",
+                    "question": "本次学习的主要卡点是什么？",
+                    "type": "text",
+                    "options": [],
+                    "required": True,
+                    "dimension": "问题诊断",
+                },
+                {
+                    "id": "next_plan",
+                    "question": "你下一次学习准备优先完成什么？",
+                    "type": "text",
+                    "options": [],
+                    "required": True,
+                    "dimension": "行动计划",
+                },
+            ]
+        )
+        return questions
+
+    def build_progress_form(self, topic: str, path: Dict, profile: Dict) -> Dict:
+        system = (
+            "你是学习进度问卷生成智能体。请基于学习路径和学生画像生成选择问答式问卷。"
+            "必须返回严格JSON，不要输出任何解释。题目应覆盖完成度、难度、投入、卡点、下一步计划。"
+            "优先使用单选、多选、量表题，允许少量文本题。"
+        )
+        user = {
+            "topic": topic,
+            "profile": profile,
+            "learning_path": path,
+            "output_schema": {
+                "form_version": "v2",
+                "form_title": "学习进度问卷",
+                "instructions": "请根据本次学习真实情况作答，提交后将用于学习评估。",
+                "questions": [
+                    {
+                        "id": "q1",
+                        "question": "",
+                        "type": "single_choice",
+                        "options": ["", ""],
+                        "required": True,
+                        "dimension": "",
+                    }
+                ],
+                "rule": "每次登录至少填写一次；学习过程中可重复填写。",
+            },
+        }
+        raw = self.spark.chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
+            temperature=0.3,
+        )
+        parsed = extract_json_block(raw)
+        questions = parsed.get("questions", [])
+        normalized: List[Dict[str, Any]] = []
+        if isinstance(questions, list):
+            for i, q in enumerate(questions, start=1):
+                if not isinstance(q, dict):
+                    continue
+                q_type = self._normalize_question_type(_stringify(q.get("type", "")))
+                options = q.get("options", [])
+                if not isinstance(options, list):
+                    options = []
+                options = [_stringify(opt) for opt in options if _stringify(opt)]
+                if q_type in {"single_choice", "multi_choice", "scale"} and not options:
+                    if q_type == "scale":
+                        options = ["1", "2", "3", "4", "5"]
+                    else:
+                        options = ["A", "B", "C", "D"]
+                normalized.append(
+                    {
+                        "id": _stringify(q.get("id", f"q{i}")) or f"q{i}",
+                        "question": _stringify(q.get("question", "")) or f"问题{i}",
+                        "type": q_type,
+                        "options": options,
+                        "required": bool(q.get("required", True)),
+                        "dimension": _stringify(q.get("dimension", "学习进度")),
+                    }
+                )
+        if not normalized:
+            normalized = self._default_progress_questions(path)
+        return {
+            "form_version": _stringify(parsed.get("form_version", "v2")) or "v2",
+            "topic": topic,
+            "form_title": _stringify(parsed.get("form_title", "学习进度问卷")) or "学习进度问卷",
+            "instructions": _stringify(parsed.get("instructions", "请按真实学习情况作答，提交后将用于评估。")),
+            "questions": normalized,
+            "rule": _stringify(parsed.get("rule", "每次登录至少填写一次；学习过程中可重复填写。")),
+        }
 
     def plan_learning_path(self, topic: str, profile: Dict, resources: Dict[str, str]) -> Dict:
         system = (
@@ -144,16 +418,31 @@ class MultiAgentLearningSystem:
         user = f"学习主题: {topic}\n学生画像: {json.dumps(profile, ensure_ascii=False)}\n问题: {question}"
         return self.spark.chat([{"role": "system", "content": system}, {"role": "user", "content": user}], temperature=0.4)
 
-    def evaluate_learning(self, progress_text: str, profile: Dict, path: Dict) -> Dict:
-        system = "你是学习效果评估智能体。输出严格JSON，给出多维评分、问题诊断和调整建议。"
+    def evaluate_learning(self, progress_payload: Dict, profile: Dict, path: Dict) -> Dict:
+        system = (
+            "你是学习效果评估智能体。请基于学习路径与学习进度进行详细评估。"
+            "学习进度输入是问卷作答结果，请充分利用作答内容。"
+            "输出严格JSON，必须包含总体结论、综合评分、按阶段评估、效率分析、风险提醒、下一步目标。"
+        )
         user = {
-            "progress": progress_text,
+            "progress": progress_payload,
             "profile": profile,
             "path": path,
             "output_schema": {
-                "scores": {"knowledge_mastery": 0, "practice_accuracy": 0, "efficiency": 0, "stability": 0},
-                "diagnosis": [],
-                "plan_adjustments": [],
+                "summary": "",
+                "overall_score": 0,
+                "stage_progress": [
+                    {
+                        "stage_no": 1,
+                        "goal": "",
+                        "completion_rate": 0,
+                        "quality_score": 0,
+                        "issues": [],
+                        "next_actions": [],
+                    }
+                ],
+                "study_efficiency": {"planned_hours": 0, "actual_hours": 0, "deviation_note": ""},
+                "risk_alerts": [],
                 "next_week_targets": [],
             },
         }
@@ -167,30 +456,43 @@ class MultiAgentLearningSystem:
         profile_data = self.build_or_update_profile(dialogue)
         resources = self.generate_resources(topic=topic, profile=profile_data, course=course)
         path = self.plan_learning_path(topic=topic, profile=profile_data, resources=resources)
-        report = {"profile": profile_data, "resources": resources, "learning_path": path}
+        progress_form_template = self.build_progress_form(topic=topic, path=path, profile=profile_data)
+        report = {
+            "profile": profile_data,
+            "resources": resources,
+            "learning_path": path,
+            "progress_form_template": progress_form_template,
+        }
         if progress.strip():
-            report["evaluation"] = self.evaluate_learning(progress, profile_data, path)
+            report["evaluation"] = self.evaluate_learning({"reflection": progress}, profile_data, path)
         return report
 
-    def save_report(self, report: Dict, output_name: str) -> Path:
+    def save_report(self, report: Dict, output_name: str) -> tuple[Path, Dict[str, str]]:
         run_dir = self.output_dir / output_name
         run_dir.mkdir(parents=True, exist_ok=True)
-
-        (run_dir / "profile.json").write_text(json.dumps(report["profile"], ensure_ascii=False, indent=2), encoding="utf-8")
-        (run_dir / "learning_path.json").write_text(
-            json.dumps(report["learning_path"], ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        if "evaluation" in report:
-            (run_dir / "evaluation.json").write_text(
-                json.dumps(report["evaluation"], ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
 
         resources_dir = run_dir / "resources"
         resources_dir.mkdir(parents=True, exist_ok=True)
         for key, value in report["resources"].items():
             safe_name = re.sub(r"[\\/:*?\"<>|]", "_", key)
             (resources_dir / f"{safe_name}.md").write_text(value, encoding="utf-8")
-        return run_dir
 
+        markdown_payload = self.build_report_markdown(report)
+        self.persist_markdown_files(run_dir, markdown_payload)
+        return run_dir, markdown_payload
+
+    def persist_markdown_files(self, run_dir: Path, markdown_payload: Dict[str, str]):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        markdown_dir = run_dir / "markdown"
+        markdown_dir.mkdir(parents=True, exist_ok=True)
+
+        files = {
+            "学习画像.md": markdown_payload.get("profile_md", ""),
+            "学习路径.md": markdown_payload.get("learning_path_md", ""),
+            "学习进度表单.md": markdown_payload.get("progress_form_md", ""),
+            "学习评估.md": markdown_payload.get("evaluation_md", ""),
+            "AI返回总览.md": markdown_payload.get("full_report_md", ""),
+        }
+        for name, content in files.items():
+            (markdown_dir / name).write_text(content, encoding="utf-8")
+            (run_dir / name).write_text(content, encoding="utf-8")

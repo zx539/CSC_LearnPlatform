@@ -40,6 +40,9 @@ class UserStore:
     def _run_file(self, username: str, run_name: str) -> Path:
         return self._user_dir(username) / "runs" / f"{run_name}.json"
 
+    def _progress_file(self, username: str) -> Path:
+        return self._user_dir(username) / "progress_log.json"
+
     def _read_json(self, path: Path, default: Any) -> Any:
         if not path.exists():
             return default
@@ -72,6 +75,7 @@ class UserStore:
         request_payload: Dict[str, Any],
         report: Dict[str, Any],
         output_dir: str,
+        report_markdown: Dict[str, str] | None = None,
     ):
         run_payload = {
             "run_name": run_name,
@@ -79,6 +83,7 @@ class UserStore:
             "request": request_payload,
             "output_dir": output_dir,
             "report": report,
+            "report_markdown": report_markdown or {},
         }
         self._write_json(self._run_file(username, run_name), run_payload)
         self._write_json(self._latest_file(username), run_payload)
@@ -108,6 +113,60 @@ class UserStore:
     def get_latest_report(self, username: str) -> Dict[str, Any] | None:
         payload = self._read_json(self._latest_file(username), None)
         return payload
+
+    def has_latest_report(self, username: str) -> bool:
+        return self._latest_file(username).exists()
+
+    def update_latest_report(self, username: str, payload: Dict[str, Any]):
+        self._write_json(self._latest_file(username), payload)
+        run_name = str(payload.get("run_name", "")).strip()
+        if run_name:
+            self._write_json(self._run_file(username, run_name), payload)
+
+    def update_run(self, username: str, run_name: str, payload: Dict[str, Any]):
+        self._write_json(self._run_file(username, run_name), payload)
+
+    def delete_run(self, username: str, run_name: str) -> bool:
+        run_path = self._run_file(username, run_name)
+        if not run_path.exists():
+            return False
+
+        run_path.unlink()
+
+        history = self._read_json(self._history_file(username), [])
+        new_history = [item for item in history if str(item.get("run_name", "")).strip() != run_name]
+        self._write_json(self._history_file(username), new_history)
+
+        progress_logs = self._read_json(self._progress_file(username), [])
+        filtered_logs = [item for item in progress_logs if str(item.get("run_name", "")).strip() != run_name]
+        self._write_json(self._progress_file(username), filtered_logs)
+
+        latest_path = self._latest_file(username)
+        latest = self._read_json(latest_path, None)
+        latest_run_name = ""
+        if isinstance(latest, dict):
+            latest_run_name = str(latest.get("run_name", "")).strip()
+
+        if latest_run_name == run_name:
+            next_run_name = ""
+            if new_history:
+                next_run_name = str(new_history[0].get("run_name", "")).strip()
+            next_payload = self.get_run(username, next_run_name) if next_run_name else None
+            if isinstance(next_payload, dict):
+                self._write_json(latest_path, next_payload)
+            elif latest_path.exists():
+                latest_path.unlink()
+
+        return True
+
+    def append_progress_log(self, username: str, entry: Dict[str, Any]):
+        logs = self._read_json(self._progress_file(username), [])
+        logs.insert(0, entry)
+        self._write_json(self._progress_file(username), logs[:500])
+
+    def get_progress_logs(self, username: str, limit: int = 30) -> List[Dict[str, Any]]:
+        logs = self._read_json(self._progress_file(username), [])
+        return logs[: max(1, limit)]
 
     def save_tutor(self, username: str, question: str, answer: str, topic: str):
         logs = self._read_json(self._tutor_file(username), [])
