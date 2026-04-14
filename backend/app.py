@@ -233,6 +233,9 @@ def progress_checkin():
     checkin = payload.get("checkin")
     if not isinstance(checkin, dict):
         return jsonify({"error": "checkin 必须是对象类型"}), 400
+    form_type = str(payload.get("form_type", "progress")).strip().lower() or "progress"
+    if form_type not in {"progress", "test"}:
+        return jsonify({"error": "form_type 仅支持 progress 或 test"}), 400
     responses = checkin.get("responses")
     if not isinstance(responses, list) or not responses:
         return jsonify({"error": "问卷答案不能为空，请先完成问卷填写"}), 400
@@ -263,23 +266,63 @@ def progress_checkin():
         default_model = str(req_payload.get("model", "4.0Ultra")).strip() or "4.0Ultra"
     model = str(payload.get("model", default_model)).strip() or default_model
 
-    try:
-        system = create_system(model=model)
-        evaluation = system.evaluate_learning(progress_payload=checkin, profile=profile, path=path)
-    except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
-        return jsonify({"error": str(exc)}), 500
+    system = create_system(model=model)
+    if form_type == "progress":
+        try:
+            evaluation = system.evaluate_learning(progress_payload=checkin, profile=profile, path=path)
+        except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
+            return jsonify({"error": str(exc)}), 500
+        report["evaluation"] = evaluation
+    else:
+        evaluation = report.get("evaluation", {})
+        if not isinstance(evaluation, dict):
+            evaluation = {}
+    generated_next_form = False
 
-    report["evaluation"] = evaluation
+    questionnaire_history = report.get("questionnaire_history", [])
+    if not isinstance(questionnaire_history, list):
+        questionnaire_history = []
+
+    if form_type == "test":
+        req_topic = ""
+        req_data = target_payload.get("request", {})
+        if isinstance(req_data, dict):
+            req_topic = str(req_data.get("topic", "")).strip()
+        try:
+            next_form = system.build_progress_form(
+                topic=req_topic or str(checkin.get("topic", "")).strip(),
+                path=path,
+                profile=profile,
+                last_checkin=checkin,
+                last_evaluation=evaluation,
+            )
+        except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
+            return jsonify({"error": str(exc)}), 500
+        report["progress_form_template"] = next_form
+        generated_next_form = True
+        questionnaire_history.insert(
+            0,
+            {
+                "form_type": "progress",
+                "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "form": next_form,
+                "markdown": system._progress_form_to_markdown(next_form),
+            },
+        )
+
+    report["questionnaire_history"] = questionnaire_history[:200]
     report_markdown = system.build_report_markdown(report)
     target_payload["report"] = report
     target_payload["report_markdown"] = report_markdown
     output_dir = str(target_payload.get("output_dir", "")).strip()
     if output_dir:
         system.persist_markdown_files(Path(output_dir), report_markdown)
+        system.persist_questionnaire_markdown_files(Path(output_dir), report.get("questionnaire_history", []))
 
     progress_entry = {
         "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "run_name": target_payload.get("run_name", ""),
+        "form_type": form_type,
         "checkin": checkin,
         "evaluation": evaluation,
     }
@@ -299,11 +342,15 @@ def progress_checkin():
 
     return jsonify(
         {
-            "message": "学习进度已提交，评估已更新",
+            "message": "问卷已提交",
             "evaluation": evaluation,
             "evaluation_md": report_markdown.get("evaluation_md", ""),
             "report_markdown": report_markdown,
             "run_name": target_run_name,
+            "next_progress_form": report.get("progress_form_template", {}),
+            "next_test_form": report.get("test_form_template", {}),
+            "generated_next_form": generated_next_form,
+            "form_type": form_type,
         }
     )
 

@@ -199,22 +199,35 @@ textarea:focus {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  padding: 8px;
+  border: 1px solid #e4ecff;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f9fbff, #f4f8ff);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .tab {
-  border: 1px solid #d8e5ff;
-  background: #f2f7ff;
-  color: #4a5c86;
-  padding: 8px 14px;
+  border: 1px solid #d7e4ff;
+  background: linear-gradient(180deg, #ffffff, #f0f6ff);
+  color: #3f5380;
+  padding: 9px 15px;
   border-radius: 20px;
   cursor: pointer;
   font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.tab:hover {
+  transform: translateY(-1px);
+  border-color: #bcd0ff;
+  box-shadow: 0 6px 14px rgba(79, 124, 255, 0.12);
 }
 
 .tab.active {
   background: linear-gradient(90deg, #4f7cff, #7b6dff);
   color: #fff;
   border-color: transparent;
+  box-shadow: 0 10px 20px rgba(79, 124, 255, 0.26);
 }
 
 .panel {
@@ -312,6 +325,17 @@ textarea:focus {
   border: 0;
   border-top: 1px solid #d8e4ff;
   margin: 1.1em 0;
+}
+
+.markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+.markdown-body .mermaid {
+  overflow-x: auto;
+  margin: 8px 0;
 }
 
 .table-wrap {
@@ -413,6 +437,16 @@ textarea:focus {
   margin: 0 0 8px;
   color: #3d5194;
   font-size: 15px;
+}
+
+.progress-form-title {
+  margin: 0 0 8px;
+  color: #2f4488;
+  font-size: 16px;
+}
+
+.questionnaire-switch {
+  margin-top: 10px;
 }
 
 .progress-question-title {

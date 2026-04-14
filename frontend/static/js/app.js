@@ -9,6 +9,9 @@ const state = {
   topic: "",
   progressFormTemplate: {},
   progressAnswers: {},
+  testFormTemplate: {},
+  testAnswers: {},
+  formMode: "progress",
   progressCurrentIndex: 0,
   activeController: null,
   tutorVisible: false,
@@ -91,6 +94,9 @@ function configureMarkdownRenderer() {
     gfm: true,
     breaks: true,
   });
+  if (window.mermaid) {
+    mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "default" });
+  }
 }
 
 function enhanceMarkdown(container) {
@@ -105,6 +111,33 @@ function enhanceMarkdown(container) {
   });
   if (window.hljs) {
     container.querySelectorAll("pre code").forEach((block) => window.hljs.highlightElement(block));
+  }
+  if (window.renderMathInElement) {
+    window.renderMathInElement(container, {
+      delimiters: [
+        { left: "$$", right: "$$", display: true },
+        { left: "$", right: "$", display: false },
+        { left: "\\(", right: "\\)", display: false },
+        { left: "\\[", right: "\\]", display: true },
+      ],
+      throwOnError: false,
+    });
+  }
+  if (window.mermaid) {
+    container.querySelectorAll("pre code.language-mermaid").forEach((node, idx) => {
+      const pre = node.closest("pre");
+      if (!pre || pre.dataset.mermaidRendered === "1") return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "mermaid";
+      wrapper.textContent = node.textContent || "";
+      wrapper.id = `mermaid-${Date.now()}-${idx}`;
+      pre.replaceWith(wrapper);
+    });
+    container.querySelectorAll(".mermaid").forEach((node) => {
+      if (node.dataset.rendered === "1") return;
+      node.dataset.rendered = "1";
+    });
+    mermaid.run({ nodes: container.querySelectorAll(".mermaid") });
   }
 }
 
@@ -164,20 +197,32 @@ function buildFallbackReportMarkdown(report) {
   ].join("\n\n");
 }
 
-function renderResources(resources) {
-  const container = byId("resources");
+function clearDynamicResourceTabs() {
+  document.querySelectorAll(".resource-tab-dynamic").forEach((el) => el.remove());
+  document.querySelectorAll(".resource-panel-dynamic").forEach((el) => el.remove());
+}
+
+function renderResourcesAsTabs(resources) {
+  clearDynamicResourceTabs();
+  const tabsWrap = byId("resultTabs");
+  const panelsWrap = document.querySelector("#resultCard .tab-panels");
   const entries = Object.entries(resources || {});
-  if (!entries.length) {
-    container.innerHTML = "<p class='muted-text'>暂无资源</p>";
-    return;
-  }
-  container.innerHTML = entries
-    .map(([name, content]) => {
-      const html = renderMarkdownContent(content || "");
-      return `<article class="resource-item markdown-body"><h3>${name}</h3><div>${html}</div></article>`;
-    })
-    .join("");
-  enhanceMarkdown(container);
+  entries.forEach(([name, content], idx) => {
+    const panelId = `resource_${idx}`;
+    const tab = document.createElement("button");
+    tab.className = "tab resource-tab-dynamic";
+    tab.dataset.tab = panelId;
+    tab.textContent = name;
+    tabsWrap.appendChild(tab);
+
+    const panel = document.createElement("section");
+    panel.id = panelId;
+    panel.className = "panel resource-panel-dynamic";
+    const html = renderMarkdownContent(content || "");
+    panel.innerHTML = `<article class="resource-item markdown-body"><div>${html}</div></article>`;
+    panelsWrap.appendChild(panel);
+    enhanceMarkdown(panel);
+  });
 }
 
 function renderReport(report, reportMarkdown = {}) {
@@ -190,8 +235,7 @@ function renderReport(report, reportMarkdown = {}) {
     reportMarkdown.evaluation_md || buildFallbackMarkdown("学习评估", report.evaluation || { summary: "暂无学习评估。" }),
     "暂无学习评估",
   );
-  renderResources(report.resources || {});
-  renderMarkdown("aiMarkdown", reportMarkdown.full_report_md || buildFallbackReportMarkdown(report), "暂无 AI 返回内容");
+  renderResourcesAsTabs(report.resources || {});
 }
 
 function renderProjectOptions(runs) {
@@ -257,10 +301,11 @@ function saveCurrentProgressAnswer() {
   const q = questions[current];
   const qid = q.id || `q${current + 1}`;
   const qtype = q.type || "text";
+  const answers = state.formMode === "test" ? state.testAnswers : state.progressAnswers;
 
   if (qtype === "single_choice") {
     const checked = document.querySelector(".progress-answer-single:checked");
-    state.progressAnswers[qid] = checked ? checked.value : "";
+    answers[qid] = checked ? checked.value : "";
     return;
   }
   if (qtype === "multi_choice") {
@@ -268,32 +313,48 @@ function saveCurrentProgressAnswer() {
     document.querySelectorAll(".progress-answer-multi").forEach((el) => {
       if (el.checked) values.push(el.value);
     });
-    state.progressAnswers[qid] = values;
+    answers[qid] = values;
     return;
   }
   if (qtype === "scale") {
     const checked = document.querySelector(".progress-answer-scale:checked");
-    state.progressAnswers[qid] = checked ? checked.value : "";
+    answers[qid] = checked ? checked.value : "";
     return;
   }
-  state.progressAnswers[qid] = (byId("progressTextAnswer")?.value || "").trim();
+  answers[qid] = (byId("progressTextAnswer")?.value || "").trim();
+}
+
+function setFormMode(mode) {
+  state.formMode = mode;
+  setVisible("submitProgressBtn", mode === "progress");
+  setVisible("submitTestBtn", mode === "test");
+  setVisible("skipTestBtn", mode === "test");
+  const backBtn = byId("backFromProgressBtn");
+  if (backBtn) {
+    backBtn.textContent = mode === "test" ? "← 返回学习页面" : "← 返回项目选择";
+  }
 }
 
 function renderProgressQuestion() {
   const wrap = byId("progressFormWrap");
   const questions = state.progressFormTemplate?.questions || [];
   if (!questions.length) {
-    wrap.innerHTML = "<p class='muted-text'>该项目暂无进度表单。</p>";
+    const text = state.formMode === "test" ? "当前暂无测试问卷，可选择跳过。" : "该项目暂无学习进度调查问卷。";
+    wrap.innerHTML = `<p class='muted-text'>${text}</p>`;
     return;
   }
 
   const current = Math.min(Math.max(state.progressCurrentIndex, 0), questions.length - 1);
   state.progressCurrentIndex = current;
   const question = questions[current];
+  const formTitle = escapeHtml(state.progressFormTemplate?.form_title || "学习进度问卷");
+  const instructions = escapeHtml(state.progressFormTemplate?.instructions || "");
+  const stageNo = escapeHtml(String(state.progressFormTemplate?.stage_no || ""));
   const qid = question.id || `q${current + 1}`;
   const qtype = question.type || "text";
   const requiredMark = question.required ? "（必填）" : "（选填）";
-  const old = state.progressAnswers[qid];
+  const answers = state.formMode === "test" ? state.testAnswers : state.progressAnswers;
+  const old = answers[qid];
 
   let answerHtml = "";
   if (qtype === "single_choice") {
@@ -327,6 +388,8 @@ function renderProgressQuestion() {
 
   wrap.innerHTML = `
     <section class="progress-stage">
+      <h3 class="progress-form-title">${formTitle}${stageNo ? `（阶段 ${stageNo}）` : ""}</h3>
+      ${instructions ? `<p class="muted-text">${instructions}</p>` : ""}
       <div class="muted-text">第 ${current + 1} / ${questions.length} 题</div>
       <h3 class="progress-question-title">Q${current + 1}. ${escapeHtml(question.question || "未命名问题")} ${requiredMark}</h3>
       ${answerHtml}
@@ -353,14 +416,31 @@ function renderProgressQuestion() {
 function renderProgressForm(template = {}, latestCheckin = null) {
   state.progressFormTemplate = template || {};
   state.progressCurrentIndex = 0;
-  state.progressAnswers = {};
-  (latestCheckin?.responses || []).forEach((item) => {
-    state.progressAnswers[item.question_id] = item.answer;
-  });
+  if (latestCheckin && latestCheckin.questionnaire_type === "progress") {
+    const answers = {};
+    (latestCheckin.responses || []).forEach((item) => {
+      answers[item.question_id] = item.answer;
+    });
+    state.progressAnswers = answers;
+  }
+  setFormMode("progress");
   renderProgressQuestion();
 }
 
-function collectProgressFormData() {
+function renderTestForm(template = {}, latestCheckin = null) {
+  state.testFormTemplate = template || {};
+  if (latestCheckin && latestCheckin.questionnaire_type === "test") {
+    const answers = {};
+    (latestCheckin.responses || []).forEach((item) => {
+      answers[item.question_id] = item.answer;
+    });
+    state.testAnswers = answers;
+  }
+}
+
+function collectFormData(formType = "progress") {
+  state.progressFormTemplate = formType === "test" ? state.testFormTemplate : state.progressFormTemplate;
+  setFormMode(formType);
   saveCurrentProgressAnswer();
   const responses = [];
   const requiredErrors = [];
@@ -369,7 +449,8 @@ function collectProgressFormData() {
   questions.forEach((q, idx) => {
     const qid = q.id || `q${idx + 1}`;
     const qtype = q.type || "text";
-    const answer = state.progressAnswers[qid];
+    const answers = formType === "test" ? state.testAnswers : state.progressAnswers;
+    const answer = answers[qid];
     const empty =
       answer === undefined ||
       answer === null ||
@@ -383,6 +464,7 @@ function collectProgressFormData() {
     valid: requiredErrors.length === 0,
     payload: {
       topic: state.topic,
+      questionnaire_type: formType,
       responses,
     },
   };
@@ -400,11 +482,10 @@ function setActiveTab(tabId) {
 function clearResultPanels() {
   state.report = null;
   state.reportMarkdown = {};
+  clearDynamicResourceTabs();
   byId("profile").innerHTML = "";
   byId("path").innerHTML = "";
   byId("evaluate").innerHTML = "";
-  byId("resources").innerHTML = "";
-  byId("aiMarkdown").innerHTML = "";
   byId("question").value = "";
   byId("tutorHint").textContent = "可查看并延续之前的会话记忆。";
   renderTutorHistory();
@@ -585,8 +666,15 @@ async function chooseExistingProject() {
   state.existingProgressSubmitted = false;
   state.report = data.report || {};
   state.reportMarkdown = data.report_markdown || {};
-  renderProgressForm(data.report?.progress_form_template || {}, data.progress_checkins?.[0]?.checkin || null);
-  byId("progressNotice").textContent = "请先填写学习进度并提交，提交后进入学习画像与完整方案页面。";
+  const checkins = Array.isArray(data.progress_checkins) ? data.progress_checkins : [];
+  const latestProgressCheckin = checkins.find((item) => item?.form_type === "progress")?.checkin || null;
+  const latestTestCheckin = checkins.find((item) => item?.form_type === "test")?.checkin || null;
+  state.progressAnswers = {};
+  state.testAnswers = {};
+  state.testFormTemplate = data.report?.test_form_template || {};
+  renderProgressForm(data.report?.progress_form_template || {}, latestProgressCheckin);
+  renderTestForm(state.testFormTemplate, latestTestCheckin);
+  byId("progressNotice").textContent = "进入软件请先填写学习进度调查问卷。";
   setStep("progress");
   setProjectStatus(`已选择已有项目：${runName}`);
   setStatus("已加载进度问卷，请先提交学习进度。");
@@ -598,6 +686,9 @@ function chooseNewProject() {
   state.existingProgressSubmitted = false;
   state.progressFormTemplate = {};
   state.progressAnswers = {};
+  state.testFormTemplate = {};
+  state.testAnswers = {};
+  state.formMode = "progress";
   state.progressCurrentIndex = 0;
   byId("course").value = "";
   byId("topic").value = "";
@@ -618,8 +709,18 @@ function goBackToProjectSelection() {
   setProjectStatus("请选择已有项目或新建学习项目。");
 }
 
+function goBackFromProgress() {
+  if (state.mode === "existing" && state.formMode === "test") {
+    setStep("result");
+    setStatus("已返回学习页面。");
+    return;
+  }
+  goBackToProjectSelection();
+}
+
 function goBackFromResult() {
   if (state.mode === "existing") {
+    renderProgressForm(state.report?.progress_form_template || state.progressFormTemplate || {});
     setStep("progress");
     return;
   }
@@ -628,6 +729,27 @@ function goBackFromResult() {
     return;
   }
   setStep("project");
+}
+
+function openTestSurveyStep() {
+  if (state.mode !== "existing") return;
+  const testTemplate = state.testFormTemplate || {};
+  if (!Array.isArray(testTemplate.questions) || !testTemplate.questions.length) {
+    setStatus("当前暂无测试问卷，可直接跳过，进度问卷不会更新。");
+    return;
+  }
+  state.progressFormTemplate = testTemplate;
+  state.progressCurrentIndex = 0;
+  setFormMode("test");
+  renderProgressQuestion();
+  setStep("progress");
+  setStatus("请根据学习完成情况填写测试问卷（可选）。");
+}
+
+function skipTestSurvey() {
+  if (state.mode !== "existing") return;
+  setStep("result");
+  setStatus("已跳过测试问卷，下次进入软件的学习进度问卷保持不变。");
 }
 
 async function generate() {
@@ -689,12 +811,12 @@ async function submitProgress() {
     setStatus("未检测到学习项目，请重新选择。");
     return;
   }
-  const checkin = collectProgressFormData();
+  const checkin = collectFormData("progress");
   if (!checkin.valid) {
     setStatus("请完成所有必填题目后再提交。");
     return;
   }
-  setStatus("正在提交学习进度并请求星火评估...");
+  setStatus("正在提交学习进度调查问卷...");
 
   const data = await withLoading(
     "正在请求星火 AI 评估学习进度...",
@@ -704,6 +826,7 @@ async function submitProgress() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           run_name: state.selectedRunName,
+          form_type: "progress",
           model: byId("model").value.trim() || "4.0Ultra",
           checkin: checkin.payload,
         }),
@@ -730,10 +853,63 @@ async function submitProgress() {
     renderReport(state.report, state.reportMarkdown);
   }
   state.existingProgressSubmitted = true;
-  byId("progressNotice").textContent = "学习进度已提交并完成评估。";
+  byId("progressNotice").textContent = "学习进度调查问卷已提交。你可继续学习，完成后再填写测试问卷（可选）。";
   setActiveTab("profile");
   setStep("result");
-  setStatus("学习进度已提交，已进入学习画像页面。");
+  setStatus("学习进度调查问卷已提交。");
+}
+
+async function submitTest() {
+  if (state.mode !== "existing" || !state.selectedRunName) {
+    setStatus("请先选择“已有学习项目”。");
+    return;
+  }
+  const checkin = collectFormData("test");
+  if (!checkin.valid) {
+    setStatus("请完成所有必填题目后再提交。");
+    return;
+  }
+  setStatus("正在提交测试问卷并生成下次进度问卷...");
+  const data = await withLoading(
+    "正在请求星火 AI 生成下一次学习进度问卷...",
+    async (signal) => {
+      const resp = await fetch("/api/progress/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          run_name: state.selectedRunName,
+          form_type: "test",
+          model: byId("model").value.trim() || "4.0Ultra",
+          checkin: checkin.payload,
+        }),
+        signal,
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "提交失败");
+      return result;
+    },
+    { cancellable: true },
+  ).catch((err) => {
+    if (err?.name === "AbortError") {
+      setStatus("已取消本次星火评估请求。");
+      return null;
+    }
+    setStatus(`测试问卷提交失败：${err.message}`);
+    return null;
+  });
+  if (!data) return;
+
+  if (data.next_progress_form && typeof data.next_progress_form === "object") {
+    state.report.progress_form_template = data.next_progress_form;
+    state.progressFormTemplate = data.next_progress_form;
+  }
+  state.reportMarkdown = data.report_markdown || state.reportMarkdown;
+  renderReport(state.report, state.reportMarkdown);
+  byId("progressNotice").textContent = data.generated_next_form
+    ? "测试问卷已提交，已生成下一次进入软件需填写的学习进度调查问卷。"
+    : "测试问卷已提交，当前未更新下一次学习进度问卷。";
+  setStep("result");
+  setStatus(data.generated_next_form ? "测试问卷已提交，下一次进度问卷已更新。" : "测试问卷已提交。");
 }
 
 async function askTutor() {
@@ -809,15 +985,13 @@ async function deleteHistory(runName) {
 }
 
 function initTabs() {
-  const tabs = document.querySelectorAll(".tab");
-  const panels = document.querySelectorAll(".panel");
-  tabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      tabs.forEach((t) => t.classList.remove("active"));
-      panels.forEach((p) => p.classList.remove("active"));
-      tab.classList.add("active");
-      byId(tab.dataset.tab).classList.add("active");
-    });
+  const tabsWrap = byId("resultTabs");
+  tabsWrap.addEventListener("click", (event) => {
+    const tab = event.target.closest(".tab");
+    if (!tab || !tabsWrap.contains(tab)) return;
+    const tabId = tab.dataset.tab;
+    if (!tabId) return;
+    setActiveTab(tabId);
   });
 }
 
@@ -829,16 +1003,20 @@ async function boot() {
   byId("chooseNewBtn").addEventListener("click", chooseNewProject);
   byId("generateBtn").addEventListener("click", generate);
   byId("submitProgressBtn").addEventListener("click", submitProgress);
+  byId("submitTestBtn").addEventListener("click", submitTest);
+  byId("skipTestBtn").addEventListener("click", skipTestSurvey);
   byId("askBtn").addEventListener("click", askTutor);
   byId("backFromTaskBtn").addEventListener("click", goBackToProjectSelection);
-  byId("backFromProgressBtn").addEventListener("click", goBackToProjectSelection);
+  byId("backFromProgressBtn").addEventListener("click", goBackFromProgress);
   byId("backFromResultBtn").addEventListener("click", goBackFromResult);
+  byId("openTestSurveyBtn").addEventListener("click", openTestSurveyStep);
   byId("cancelRequestBtn").addEventListener("click", cancelCurrentRequest);
   byId("tutorToggleFab").addEventListener("click", openTutorWidget);
   byId("openTutorWidgetInlineBtn").addEventListener("click", openTutorWidget);
   byId("tutorWidgetCloseBtn").addEventListener("click", hideTutorWidget);
   byId("tutorWidgetMinBtn").addEventListener("click", toggleTutorMinimized);
   byId("clearTutorMemoryBtn").addEventListener("click", clearTutorMemory);
+  setFormMode("progress");
   try {
     restoreTutorMemory();
   } catch (err) {

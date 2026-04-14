@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>个性化学习多智能体系统</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
 </head>
@@ -84,26 +85,25 @@
           <div class="actions">
             <button id="backFromProgressBtn" class="btn-light" type="button">← 返回项目选择</button>
             <button id="submitProgressBtn" class="btn-secondary">📝 提交学习进度并更新评估</button>
+            <button id="submitTestBtn" class="btn-primary hidden-by-gate">✅ 提交测试问卷并生成下次进度问卷</button>
+            <button id="skipTestBtn" class="btn-light hidden-by-gate" type="button">跳过测试问卷（不更新下次问卷）</button>
           </div>
         </section>
 
         <section id="resultCard" class="card">
           <div class="actions result-head-actions">
             <button id="backFromResultBtn" class="btn-light" type="button">← 返回上一步</button>
+            <button id="openTestSurveyBtn" class="btn-light" type="button">🧪 填写测试问卷（可选）</button>
             <button id="openTutorWidgetInlineBtn" class="btn-secondary" type="button">💬 打开智能辅导</button>
           </div>
-          <nav class="tabs">
+          <nav id="resultTabs" class="tabs">
             <button class="tab active" data-tab="profile">学习画像</button>
-            <button class="tab" data-tab="aiMarkdown">AI返回(MD)</button>
-            <button class="tab" data-tab="resources">学习资源</button>
             <button class="tab" data-tab="path">学习路径</button>
             <button class="tab" data-tab="evaluate">学习评估</button>
           </nav>
 
           <div class="tab-panels">
             <section id="profile" class="panel active"></section>
-            <section id="aiMarkdown" class="panel"></section>
-            <section id="resources" class="panel"></section>
             <section id="path" class="panel"></section>
             <section id="evaluate" class="panel"></section>
           </div>
@@ -148,6 +148,9 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/lib/highlight.min.js"></script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>

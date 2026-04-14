@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -119,21 +120,39 @@ class MultiAgentLearningSystem:
         profile_md = self._profile_to_markdown(report.get("profile", {}))
         path_md = self._learning_path_to_markdown(report.get("learning_path", {}))
         progress_form_md = self._progress_form_to_markdown(report.get("progress_form_template", {}))
+        test_form_md = self._progress_form_to_markdown(report.get("test_form_template", {}))
         evaluation_obj = report.get("evaluation", {"summary": "本次未提供学习进度，暂未生成评估。"})
         evaluation_md = self._evaluation_to_markdown(evaluation_obj)
+        questionnaire_history = report.get("questionnaire_history", []) or []
+        history_blocks: List[str] = []
+        for item in questionnaire_history:
+            if not isinstance(item, dict):
+                continue
+            stage_no = _stringify(item.get("stage_no", ""))
+            form_type = _stringify(item.get("form_type", "progress")) or "progress"
+            form_md = _stringify(item.get("markdown", ""))
+            if not form_md:
+                continue
+            form_title = "学习进度调查问卷" if form_type == "progress" else "学习测试问卷"
+            history_blocks.append(f"## 问卷记录（{form_title} · 阶段 {stage_no or '未知'}）\n\n{form_md}")
+        questionnaire_history_md = "\n\n".join(history_blocks).strip()
 
         resource_blocks: List[str] = []
         for name, content in report.get("resources", {}).items():
             resource_blocks.append(f"## 资源：{name}\n\n{content}\n")
         resources_md = "\n".join(resource_blocks)
 
-        full_report_md = "\n\n".join([profile_md, resources_md, path_md, progress_form_md, evaluation_md]).strip() + "\n"
+        full_report_md = "\n\n".join(
+            [profile_md, resources_md, path_md, progress_form_md, test_form_md, evaluation_md, questionnaire_history_md]
+        ).strip() + "\n"
         return {
             "profile_md": profile_md,
             "resources_md": resources_md,
             "learning_path_md": path_md,
             "progress_form_md": progress_form_md,
+            "test_form_md": test_form_md,
             "evaluation_md": evaluation_md,
+            "questionnaire_history_md": questionnaire_history_md,
             "full_report_md": full_report_md,
         }
 
@@ -255,76 +274,96 @@ class MultiAgentLearningSystem:
             return "scale"
         return "text"
 
-    def _default_progress_questions(self, path: Dict) -> List[Dict[str, Any]]:
+    def _find_stage(self, path: Dict, stage_no: int) -> Dict[str, Any]:
         stages = path.get("stages", []) or []
-        questions: List[Dict[str, Any]] = []
-        for stage in stages[:4]:
-            stage_no = _stringify(stage.get("stage_no", ""))
-            goal = _stringify(stage.get("goal", "该阶段目标"))
-            questions.append(
-                {
-                    "id": f"stage_{stage_no}_completion",
-                    "question": f"你在“阶段{stage_no}：{goal}”的完成度如何？",
-                    "type": "single_choice",
-                    "options": ["0-25%", "26-50%", "51-75%", "76-100%"],
-                    "required": True,
-                    "dimension": "阶段完成度",
-                }
-            )
-            questions.append(
-                {
-                    "id": f"stage_{stage_no}_difficulty",
-                    "question": f"该阶段的学习难度体感如何？",
-                    "type": "scale",
-                    "options": ["1", "2", "3", "4", "5"],
-                    "required": True,
-                    "dimension": "学习难度",
-                }
-            )
-        questions.extend(
-            [
-                {
-                    "id": "today_hours",
-                    "question": "你今天投入学习的总时长大约是多少？",
-                    "type": "single_choice",
-                    "options": ["0-0.5小时", "0.5-1小时", "1-2小时", "2小时以上"],
-                    "required": True,
-                    "dimension": "学习投入",
-                },
-                {
-                    "id": "main_blockers",
-                    "question": "本次学习的主要卡点是什么？",
-                    "type": "text",
-                    "options": [],
-                    "required": True,
-                    "dimension": "问题诊断",
-                },
-                {
-                    "id": "next_plan",
-                    "question": "你下一次学习准备优先完成什么？",
-                    "type": "text",
-                    "options": [],
-                    "required": True,
-                    "dimension": "行动计划",
-                },
-            ]
-        )
-        return questions
+        for stage in stages:
+            raw_no = stage.get("stage_no", 0)
+            try:
+                if int(raw_no) == stage_no:
+                    return stage
+            except (TypeError, ValueError):
+                continue
+        if stages:
+            return stages[min(stage_no - 1, len(stages) - 1)]
+        return {"stage_no": stage_no, "goal": "该阶段学习目标"}
 
-    def build_progress_form(self, topic: str, path: Dict, profile: Dict) -> Dict:
+    def _default_progress_questions(self, path: Dict, stage_no: int) -> List[Dict[str, Any]]:
+        stage = self._find_stage(path, stage_no)
+        stage_goal = _stringify(stage.get("goal", "该阶段学习目标"))
+        return [
+            {
+                "id": f"stage_{stage_no}_quiz_1",
+                "question": f"【阶段{stage_no}测试】与“{stage_goal}”最相关的核心概念你掌握到什么程度？",
+                "type": "single_choice",
+                "options": ["仅了解名词", "能解释原理", "能独立解题", "能迁移应用"],
+                "required": True,
+                "dimension": "知识掌握",
+            },
+            {
+                "id": f"stage_{stage_no}_quiz_2",
+                "question": "请给出本阶段一道你能独立完成的关键题型或任务。",
+                "type": "text",
+                "options": [],
+                "required": True,
+                "dimension": "能力输出",
+            },
+            {
+                "id": f"stage_{stage_no}_completion",
+                "question": "你在本阶段学习计划中的完成度如何？",
+                "type": "single_choice",
+                "options": ["0-25%", "26-50%", "51-75%", "76-100%"],
+                "required": True,
+                "dimension": "阶段完成度",
+            },
+            {
+                "id": f"stage_{stage_no}_difficulty",
+                "question": "本阶段学习难度体感如何？",
+                "type": "scale",
+                "options": ["1", "2", "3", "4", "5"],
+                "required": True,
+                "dimension": "学习难度",
+            },
+            {
+                "id": f"stage_{stage_no}_blocker",
+                "question": "本阶段最大的阻碍是什么？",
+                "type": "text",
+                "options": [],
+                "required": True,
+                "dimension": "问题诊断",
+            },
+        ]
+
+    def build_progress_form(
+        self,
+        topic: str,
+        path: Dict,
+        profile: Dict,
+        stage_no: int = 1,
+        last_checkin: Dict | None = None,
+        last_evaluation: Dict | None = None,
+    ) -> Dict:
+        stage = self._find_stage(path, stage_no)
+        stage_goal = _stringify(stage.get("goal", "该阶段学习目标"))
         system = (
-            "你是学习进度问卷生成智能体。请基于学习路径和学生画像生成选择问答式问卷。"
-            "必须返回严格JSON，不要输出任何解释。题目应覆盖完成度、难度、投入、卡点、下一步计划。"
-            "优先使用单选、多选、量表题，允许少量文本题。"
+            "你是阶段学习测试与进度问卷生成智能体。"
+            "先生成可操作的小测试题，再附带进度调查题。"
+            "必须返回严格JSON，不要输出任何解释。"
+            "题目要与当前阶段目标强相关，优先单选/多选/量表，保留少量文本题。"
         )
         user = {
             "topic": topic,
             "profile": profile,
             "learning_path": path,
+            "current_stage_no": stage_no,
+            "current_stage_goal": stage_goal,
+            "last_checkin": last_checkin or {},
+            "last_evaluation": last_evaluation or {},
             "output_schema": {
-                "form_version": "v2",
-                "form_title": "学习进度问卷",
-                "instructions": "请根据本次学习真实情况作答，提交后将用于学习评估。",
+                "form_version": "v3",
+                "form_title": f"阶段{stage_no}学习测试与进度问卷",
+                "stage_no": stage_no,
+                "stage_goal": stage_goal,
+                "instructions": "请先完成阶段测试，再填写进度反馈，提交后将用于评估并生成下一阶段问卷。",
                 "questions": [
                     {
                         "id": "q1",
@@ -335,7 +374,7 @@ class MultiAgentLearningSystem:
                         "dimension": "",
                     }
                 ],
-                "rule": "每次登录至少填写一次；学习过程中可重复填写。",
+                "rule": "每完成一次阶段测试并提交后，系统生成下一阶段问卷。",
             },
         }
         raw = self.spark.chat(
@@ -370,14 +409,138 @@ class MultiAgentLearningSystem:
                     }
                 )
         if not normalized:
-            normalized = self._default_progress_questions(path)
+            normalized = self._default_progress_questions(path, stage_no)
         return {
-            "form_version": _stringify(parsed.get("form_version", "v2")) or "v2",
+            "form_version": _stringify(parsed.get("form_version", "v3")) or "v3",
             "topic": topic,
-            "form_title": _stringify(parsed.get("form_title", "学习进度问卷")) or "学习进度问卷",
-            "instructions": _stringify(parsed.get("instructions", "请按真实学习情况作答，提交后将用于评估。")),
+            "stage_no": stage_no,
+            "stage_goal": stage_goal,
+            "form_title": _stringify(parsed.get("form_title", f"阶段{stage_no}学习测试与进度问卷"))
+            or f"阶段{stage_no}学习测试与进度问卷",
+            "instructions": _stringify(
+                parsed.get("instructions", "请先完成阶段测试，再填写进度反馈，提交后将用于评估并生成下一阶段问卷。")
+            ),
             "questions": normalized,
-            "rule": _stringify(parsed.get("rule", "每次登录至少填写一次；学习过程中可重复填写。")),
+            "rule": _stringify(parsed.get("rule", "每完成一次阶段测试并提交后，系统生成下一阶段问卷。")),
+        }
+
+    def _default_test_questions(self, path: Dict, stage_no: int) -> List[Dict[str, Any]]:
+        stage = self._find_stage(path, stage_no)
+        stage_goal = _stringify(stage.get("goal", "该阶段学习目标"))
+        return [
+            {
+                "id": f"stage_{stage_no}_test_1",
+                "question": f"【阶段{stage_no}测试】你认为“{stage_goal}”最关键的判断标准是什么？",
+                "type": "single_choice",
+                "options": ["能复述定义", "能解释原理", "能独立完成题目", "能迁移到新问题"],
+                "required": True,
+                "dimension": "阶段测试",
+            },
+            {
+                "id": f"stage_{stage_no}_test_2",
+                "question": "请用 1-2 句话说明你本阶段最有把握的知识点。",
+                "type": "text",
+                "options": [],
+                "required": True,
+                "dimension": "阶段测试",
+            },
+            {
+                "id": f"stage_{stage_no}_test_3",
+                "question": "请用 1-2 句话说明你仍然不确定的知识点。",
+                "type": "text",
+                "options": [],
+                "required": True,
+                "dimension": "阶段测试",
+            },
+        ]
+
+    def build_test_form(
+        self,
+        topic: str,
+        path: Dict,
+        profile: Dict,
+        stage_no: int = 1,
+        last_checkin: Dict | None = None,
+        last_evaluation: Dict | None = None,
+    ) -> Dict:
+        stage = self._find_stage(path, stage_no)
+        stage_goal = _stringify(stage.get("goal", "该阶段学习目标"))
+        system = (
+            "你是学习阶段测试问卷生成智能体。"
+            "请针对当前阶段目标生成可操作的测试题，帮助判断是否可以进入下一阶段。"
+            "必须返回严格JSON，不要输出任何解释。"
+        )
+        user = {
+            "topic": topic,
+            "profile": profile,
+            "learning_path": path,
+            "current_stage_no": stage_no,
+            "current_stage_goal": stage_goal,
+            "last_progress_checkin": last_checkin or {},
+            "last_evaluation": last_evaluation or {},
+            "output_schema": {
+                "form_version": "v1-test",
+                "form_title": f"阶段{stage_no}学习测试问卷",
+                "stage_no": stage_no,
+                "stage_goal": stage_goal,
+                "instructions": "请在完成本阶段学习后作答。提交后系统将生成下一次进入软件需填写的学习进度调查问卷。",
+                "questions": [
+                    {
+                        "id": "t1",
+                        "question": "",
+                        "type": "single_choice",
+                        "options": ["", ""],
+                        "required": True,
+                        "dimension": "阶段测试",
+                    }
+                ],
+                "rule": "测试问卷可选填；仅在提交测试问卷后才更新下一次学习进度调查问卷。",
+            },
+        }
+        raw = self.spark.chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
+            temperature=0.3,
+        )
+        parsed = extract_json_block(raw)
+        questions = parsed.get("questions", [])
+        normalized: List[Dict[str, Any]] = []
+        if isinstance(questions, list):
+            for i, q in enumerate(questions, start=1):
+                if not isinstance(q, dict):
+                    continue
+                q_type = self._normalize_question_type(_stringify(q.get("type", "")))
+                options = q.get("options", [])
+                if not isinstance(options, list):
+                    options = []
+                options = [_stringify(opt) for opt in options if _stringify(opt)]
+                if q_type in {"single_choice", "multi_choice", "scale"} and not options:
+                    if q_type == "scale":
+                        options = ["1", "2", "3", "4", "5"]
+                    else:
+                        options = ["A", "B", "C", "D"]
+                normalized.append(
+                    {
+                        "id": _stringify(q.get("id", f"t{i}")) or f"t{i}",
+                        "question": _stringify(q.get("question", "")) or f"测试问题{i}",
+                        "type": q_type,
+                        "options": options,
+                        "required": bool(q.get("required", True)),
+                        "dimension": _stringify(q.get("dimension", "阶段测试")),
+                    }
+                )
+        if not normalized:
+            normalized = self._default_test_questions(path, stage_no)
+        return {
+            "form_version": _stringify(parsed.get("form_version", "v1-test")) or "v1-test",
+            "topic": topic,
+            "stage_no": stage_no,
+            "stage_goal": stage_goal,
+            "form_title": _stringify(parsed.get("form_title", f"阶段{stage_no}学习测试问卷")) or f"阶段{stage_no}学习测试问卷",
+            "instructions": _stringify(
+                parsed.get("instructions", "请在完成本阶段学习后作答。提交后系统将生成下一次进入软件需填写的学习进度调查问卷。")
+            ),
+            "questions": normalized,
+            "rule": _stringify(parsed.get("rule", "测试问卷可选填；仅在提交测试问卷后才更新下一次学习进度调查问卷。")),
         }
 
     def plan_learning_path(self, topic: str, profile: Dict, resources: Dict[str, str]) -> Dict:
@@ -470,12 +633,36 @@ class MultiAgentLearningSystem:
         profile_data = self.build_or_update_profile(dialogue)
         resources = self.generate_resources(topic=topic, profile=profile_data, course=course)
         path = self.plan_learning_path(topic=topic, profile=profile_data, resources=resources)
-        progress_form_template = self.build_progress_form(topic=topic, path=path, profile=profile_data)
+        stages = path.get("stages", []) or []
+        total_stages = len(stages) if stages else 1
+        current_stage_no = 1
+        progress_form_template = self.build_progress_form(topic=topic, path=path, profile=profile_data, stage_no=current_stage_no)
+        test_form_template = self.build_test_form(topic=topic, path=path, profile=profile_data, stage_no=current_stage_no)
+        progress_form_md = self._progress_form_to_markdown(progress_form_template)
+        test_form_md = self._progress_form_to_markdown(test_form_template)
         report = {
             "profile": profile_data,
             "resources": resources,
             "learning_path": path,
             "progress_form_template": progress_form_template,
+            "test_form_template": test_form_template,
+            "questionnaire_history": [
+                {
+                    "form_type": "progress",
+                    "stage_no": current_stage_no,
+                    "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "form": progress_form_template,
+                    "markdown": progress_form_md,
+                },
+                {
+                    "form_type": "test",
+                    "stage_no": current_stage_no,
+                    "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "form": test_form_template,
+                    "markdown": test_form_md,
+                },
+            ],
+            "stage_state": {"current_stage_no": current_stage_no, "total_stages": total_stages},
         }
         if progress.strip():
             report["evaluation"] = self.evaluate_learning({"reflection": progress}, profile_data, path)
@@ -493,6 +680,7 @@ class MultiAgentLearningSystem:
 
         markdown_payload = self.build_report_markdown(report)
         self.persist_markdown_files(run_dir, markdown_payload)
+        self.persist_questionnaire_markdown_files(run_dir, report.get("questionnaire_history", []))
         return run_dir, markdown_payload
 
     def persist_markdown_files(self, run_dir: Path, markdown_payload: Dict[str, str]):
@@ -504,9 +692,29 @@ class MultiAgentLearningSystem:
             "学习画像.md": markdown_payload.get("profile_md", ""),
             "学习路径.md": markdown_payload.get("learning_path_md", ""),
             "学习进度表单.md": markdown_payload.get("progress_form_md", ""),
+            "学习测试问卷.md": markdown_payload.get("test_form_md", ""),
             "学习评估.md": markdown_payload.get("evaluation_md", ""),
+            "学习问卷历史.md": markdown_payload.get("questionnaire_history_md", ""),
             "AI返回总览.md": markdown_payload.get("full_report_md", ""),
         }
         for name, content in files.items():
             (markdown_dir / name).write_text(content, encoding="utf-8")
             (run_dir / name).write_text(content, encoding="utf-8")
+
+    def persist_questionnaire_markdown_files(self, run_dir: Path, history: List[Dict[str, Any]]):
+        markdown_dir = run_dir / "markdown"
+        markdown_dir.mkdir(parents=True, exist_ok=True)
+        if not isinstance(history, list):
+            return
+        for idx, item in enumerate(history, start=1):
+            if not isinstance(item, dict):
+                continue
+            stage_no = _stringify(item.get("stage_no", idx)) or str(idx)
+            form_type = _stringify(item.get("form_type", "progress")) or "progress"
+            md = _stringify(item.get("markdown", ""))
+            if not md.strip():
+                continue
+            prefix = "学习进度调查问卷" if form_type == "progress" else "学习测试问卷"
+            file_name = f"{prefix}_阶段{stage_no}_第{idx}版.md"
+            (markdown_dir / file_name).write_text(md, encoding="utf-8")
+            (run_dir / file_name).write_text(md, encoding="utf-8")
