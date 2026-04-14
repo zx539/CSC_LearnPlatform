@@ -32,7 +32,7 @@
 │           └── runs/
 │               └── run_xxx.json       # 每次任务完整数据（JSON）
 ├── outputs/                           # 每次运行自动落盘结果
-├── run.py                             # Web 启动入口
+├── main.py                             # Web 启动入口
 ├── materials/
 │   ├── http_demo.py                   # CLI 入口（保留）
 │   ├── 星火SoarkUltra-APIkey.txt
@@ -96,17 +96,55 @@
 
 ## 3. 环境与安装
 
-### 3.1 Python 版本
+### 3.1 安装 uv（Windows / macOS / Linux）
 
-- 推荐 Python 3.9+
+推荐先确认本机 Python 版本为 3.9+。
 
-### 3.2 安装依赖
+Windows（PowerShell）：
 
-```bash
-pip3 install --break-system-packages -r requirements.txt
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
----
+macOS / Linux：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+安装完成后，重新打开终端并检查：
+
+```bash
+uv --version
+```
+
+### 3.2 安装 uv 后同步项目环境
+
+在项目根目录执行：
+
+```bash
+uv sync
+```
+
+`uv sync` 会基于项目依赖自动创建/更新本地虚拟环境并安装依赖。  
+完成后可直接通过 `uv run` 在项目环境里运行命令（无需手动激活）：
+
+```bash
+uv run python main.py
+```
+
+如需手动进入虚拟环境，可使用：
+
+- macOS / Linux: `source .venv/bin/activate`
+- Windows PowerShell: `.venv\Scripts\Activate.ps1`
+- Windows CMD: `.venv\Scripts\activate.bat`
+
+激活后建议校验解释器路径：
+
+```bash
+python -c "import sys; print(sys.executable); print('in_venv=', sys.prefix != sys.base_prefix)"
+```
+
 
 ## 4. 配置星火 API
 
@@ -131,7 +169,7 @@ export SPARK_API_AUTH="Bearer 你的密钥"
 ### 5.1 启动 Web 服务（推荐）
 
 ```bash
-python3 run.py
+python3 main.py
 ```
 
 浏览器访问：
