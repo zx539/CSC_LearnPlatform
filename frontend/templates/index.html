@@ -27,19 +27,10 @@
       <div class="left-col">
         <section id="projectCard" class="card project-card">
           <h2>学习项目选择</h2>
-          <p class="muted-text">请选择“已有项目”或“新建项目”，系统将按步骤动态加载后续内容。</p>
-          <div class="grid">
-            <label>
-              已有学习项目
-              <select id="projectSelect"></select>
-            </label>
-            <label>
-              选择操作
-              <input id="projectHint" value="先选择“已有项目”或“新建项目”" disabled />
-            </label>
-          </div>
+          <p class="muted-text">请选择已有学习项目或新建项目，已完成进度问卷的项目可直接进入学习页面。</p>
+          <div id="projectList" class="history-list project-list"></div>
           <div class="actions">
-            <button id="chooseExistingBtn" class="btn-secondary">使用已有项目并填写进度</button>
+            <button id="chooseExistingBtn" class="btn-secondary">进入已选学习项目</button>
             <button id="chooseNewBtn" class="btn-primary">新建学习项目</button>
             <span id="projectStatus" class="status">请先选择学习项目</span>
           </div>
@@ -58,11 +49,14 @@
             </label>
             <label>
               模型名称
-              <input id="model" value="4.0Ultra" />
+              <select id="model">
+                <option value="4.0Ultra">星火 4.0Ultra（质量优先）</option>
+                <option value="lite">星火 Lite（速度优先）</option>
+              </select>
             </label>
             <label>
               学习进度填写
-              <input id="progressHint" value="请在下方“学习进度填写”模块提交（每次登录至少1次）" disabled />
+              <input id="progressHint" value="每个学习项目仅需提交一次进度问卷，之后可直接进入学习页面" disabled />
             </label>
           </div>
 
@@ -79,20 +73,20 @@
         </section>
 
         <section id="progressCard" class="card progress-card">
-          <h2>学习进度填写（每次登录至少 1 次）</h2>
+          <h2>学习进度填写</h2>
           <div id="progressNotice" class="status">尚未加载进度表单</div>
           <div id="progressFormWrap" class="progress-form-wrap"></div>
           <div class="actions">
             <button id="backFromProgressBtn" class="btn-light" type="button">← 返回项目选择</button>
             <button id="submitProgressBtn" class="btn-secondary">📝 提交学习进度并更新评估</button>
-            <button id="submitTestBtn" class="btn-primary hidden-by-gate">✅ 提交测试问卷并生成下次进度问卷</button>
-            <button id="skipTestBtn" class="btn-light hidden-by-gate" type="button">跳过测试问卷（不更新下次问卷）</button>
+            <button id="submitTestBtn" class="btn-primary hidden-by-gate">✅ 提交测试问卷并更新进度/测试问卷</button>
+            <button id="skipTestBtn" class="btn-light hidden-by-gate" type="button">跳过测试问卷（保持当前测试问卷）</button>
           </div>
         </section>
 
         <section id="resultCard" class="card">
           <div class="actions result-head-actions">
-            <button id="backFromResultBtn" class="btn-light" type="button">← 返回上一步</button>
+            <button id="backFromResultBtn" class="btn-light" type="button">← 返回项目选择</button>
             <button id="openTestSurveyBtn" class="btn-light" type="button">🧪 填写测试问卷（可选）</button>
             <button id="openTutorWidgetInlineBtn" class="btn-secondary" type="button">💬 打开智能辅导</button>
           </div>
@@ -109,10 +103,6 @@
           </div>
         </section>
       </div>
-      <aside id="historyCard" class="card history-card">
-        <h2>历史记录</h2>
-        <div id="historyList" class="history-list"></div>
-      </aside>
     </section>
   </main>
 

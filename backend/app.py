@@ -14,7 +14,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = ROOT_DIR / "frontend" / "templates"
 STATIC_DIR = ROOT_DIR / "frontend" / "static"
 MATERIALS_DIR = ROOT_DIR / "materials"
-CONFIG_PATH = MATERIALS_DIR / "星火SoarkUltra-APIkey.txt"
+ULTRA_CONFIG_PATH = MATERIALS_DIR / "星火SoarkUltra-APIkey.txt"
+LITE_CONFIG_PATH = MATERIALS_DIR / "星火SparkLite-APIkey.txt"
 KB_DIR = ROOT_DIR / "data" / "knowledge_base"
 OUTPUT_DIR = ROOT_DIR / "outputs"
 USERS_DIR = ROOT_DIR / "data" / "users"
@@ -24,8 +25,24 @@ app.secret_key = os.getenv("APP_SECRET_KEY", "software-cup-spark-secret")
 user_store = UserStore(str(USERS_DIR))
 
 
+def normalize_model(model: str) -> str:
+    normalized = str(model or "").strip().lower()
+    if normalized in {"lite", "sparklite", "4.0lite"}:
+        return "lite"
+    return "4.0Ultra"
+
+
+def resolve_model_config_path(model: str) -> Path:
+    normalized = normalize_model(model)
+    if normalized == "lite":
+        return LITE_CONFIG_PATH
+    return ULTRA_CONFIG_PATH
+
+
 def create_system(model: str = "4.0Ultra") -> MultiAgentLearningSystem:
-    client = SparkClient(config_path=str(CONFIG_PATH), model=model)
+    normalized_model = normalize_model(model)
+    config_path = resolve_model_config_path(normalized_model)
+    client = SparkClient(config_path=str(config_path), model=normalized_model)
     return MultiAgentLearningSystem(spark=client, kb_dir=str(KB_DIR), output_dir=str(OUTPUT_DIR))
 
 
@@ -267,16 +284,11 @@ def progress_checkin():
     model = str(payload.get("model", default_model)).strip() or default_model
 
     system = create_system(model=model)
-    if form_type == "progress":
-        try:
-            evaluation = system.evaluate_learning(progress_payload=checkin, profile=profile, path=path)
-        except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
-            return jsonify({"error": str(exc)}), 500
-        report["evaluation"] = evaluation
-    else:
-        evaluation = report.get("evaluation", {})
-        if not isinstance(evaluation, dict):
-            evaluation = {}
+    try:
+        evaluation = system.evaluate_learning(progress_payload=checkin, profile=profile, path=path)
+    except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
+        return jsonify({"error": str(exc)}), 500
+    report["evaluation"] = evaluation
     generated_next_form = False
 
     questionnaire_history = report.get("questionnaire_history", [])
@@ -288,25 +300,94 @@ def progress_checkin():
         req_data = target_payload.get("request", {})
         if isinstance(req_data, dict):
             req_topic = str(req_data.get("topic", "")).strip()
+        topic = req_topic or str(checkin.get("topic", "")).strip()
+        current_progress_form = report.get("progress_form_template", {})
+        if not isinstance(current_progress_form, dict):
+            current_progress_form = {}
+        current_test_form = report.get("test_form_template", {})
+        if not isinstance(current_test_form, dict):
+            current_test_form = {}
+        stage_state = report.get("stage_state", {})
+        stage_no = 1
+        if isinstance(stage_state, dict):
+            try:
+                stage_no = max(1, int(stage_state.get("current_stage_no", 1)))
+            except (TypeError, ValueError):
+                stage_no = 1
         try:
-            next_form = system.build_progress_form(
-                topic=req_topic or str(checkin.get("topic", "")).strip(),
+            stage_no = max(1, int(current_progress_form.get("stage_no", stage_no)))
+        except (TypeError, ValueError):
+            stage_no = max(1, stage_no)
+        try:
+            stage_no = max(1, int(current_test_form.get("stage_no", stage_no)))
+        except (TypeError, ValueError):
+            stage_no = max(1, stage_no)
+        try:
+            next_progress_form = system.build_progress_form(
+                topic=topic,
                 path=path,
                 profile=profile,
+                stage_no=stage_no,
+                last_checkin=checkin,
+                last_evaluation=evaluation,
+            )
+            next_test_form = system.build_test_form(
+                topic=topic,
+                path=path,
+                profile=profile,
+                stage_no=stage_no,
                 last_checkin=checkin,
                 last_evaluation=evaluation,
             )
         except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
             return jsonify({"error": str(exc)}), 500
-        report["progress_form_template"] = next_form
+        report["progress_form_template"] = next_progress_form
+        report["test_form_template"] = next_test_form
         generated_next_form = True
+        if current_progress_form:
+            questionnaire_history.insert(
+                0,
+                {
+                    "form_type": "progress",
+                    "stage_no": stage_no,
+                    "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "version_tag": "old",
+                    "form": current_progress_form,
+                    "markdown": system._progress_form_to_markdown(current_progress_form),
+                },
+            )
         questionnaire_history.insert(
             0,
             {
                 "form_type": "progress",
+                "stage_no": stage_no,
                 "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "form": next_form,
-                "markdown": system._progress_form_to_markdown(next_form),
+                "version_tag": "new",
+                "form": next_progress_form,
+                "markdown": system._progress_form_to_markdown(next_progress_form),
+            },
+        )
+        if current_test_form:
+            questionnaire_history.insert(
+                0,
+                {
+                    "form_type": "test",
+                    "stage_no": stage_no,
+                    "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "version_tag": "old",
+                    "form": current_test_form,
+                    "markdown": system._progress_form_to_markdown(current_test_form),
+                },
+            )
+        questionnaire_history.insert(
+            0,
+            {
+                "form_type": "test",
+                "stage_no": stage_no,
+                "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "version_tag": "new",
+                "form": next_test_form,
+                "markdown": system._progress_form_to_markdown(next_test_form),
             },
         )
 

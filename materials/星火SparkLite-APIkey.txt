@@ -1,0 +1,2 @@
+APIkey：GukebrqIdrIDUPUrNwmr:wlocWqZWGZQgvazSDTWi
+接口地址：https://spark-api-open.xf-yun.com/v1/chat/completions

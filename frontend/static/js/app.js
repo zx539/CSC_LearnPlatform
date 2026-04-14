@@ -43,7 +43,6 @@ function setStep(step) {
   setVisible("taskCard", step === "task");
   setVisible("progressCard", step === "progress");
   setVisible("resultCard", step === "result");
-  setVisible("historyCard", step !== "project");
   setVisible("tutorToggleFab", step !== "project");
   if (step === "project") {
     state.tutorVisible = false;
@@ -142,9 +141,11 @@ function enhanceMarkdown(container) {
 }
 
 function renderMarkdownContent(rawText) {
-  const raw = (rawText || "").trim();
+  const raw = String(rawText || "").trim();
   if (!raw) return "";
-  return window.marked ? marked.parse(raw) : `<pre>${escapeHtml(raw)}</pre>`;
+  const fenced = raw.match(/^```(?:markdown|md)?\s*([\s\S]*?)\s*```$/i);
+  const normalized = fenced ? fenced[1].trim() : raw;
+  return window.marked ? marked.parse(normalized) : `<pre>${escapeHtml(normalized)}</pre>`;
 }
 
 function renderMarkdown(targetId, markdown, empty = "暂无内容") {
@@ -218,7 +219,8 @@ function renderResourcesAsTabs(resources) {
     const panel = document.createElement("section");
     panel.id = panelId;
     panel.className = "panel resource-panel-dynamic";
-    const html = renderMarkdownContent(content || "");
+    const contentText = typeof content === "string" ? content : buildFallbackMarkdown(name, content || {});
+    const html = renderMarkdownContent(contentText || "");
     panel.innerHTML = `<article class="resource-item markdown-body"><div>${html}</div></article>`;
     panelsWrap.appendChild(panel);
     enhanceMarkdown(panel);
@@ -240,55 +242,34 @@ function renderReport(report, reportMarkdown = {}) {
 
 function renderProjectOptions(runs) {
   state.runs = runs || [];
-  const select = byId("projectSelect");
+  if (state.selectedRunName && !state.runs.some((item) => item.run_name === state.selectedRunName)) {
+    state.selectedRunName = "";
+  }
+  const el = byId("projectList");
+  if (!el) return;
   if (!state.runs.length) {
-    select.innerHTML = `<option value="">暂无已有学习项目</option>`;
+    el.innerHTML = "<p class='meta project-list-empty'>暂无已有学习项目，请点击“新建学习项目”。</p>";
     return;
   }
-  select.innerHTML = [
-    `<option value="">请选择已有学习项目</option>`,
-    ...state.runs.map(
-      (item) =>
-        `<option value="${item.run_name}">${escapeHtml(item.course || "未命名课程")} · ${escapeHtml(item.topic || "未命名主题")} (${escapeHtml(item.created_at || item.run_name)})</option>`,
-    ),
-  ].join("");
-}
-
-function renderHistory(runs) {
-  const el = byId("historyList");
-  if (!runs.length) {
-    el.innerHTML = "<p class='meta'>暂无历史记录</p>";
-    return;
-  }
-  el.innerHTML = runs
+  el.innerHTML = state.runs
     .map(
       (item) => `
-      <article class="history-item" data-run="${item.run_name}">
+      <article class="history-item ${state.selectedRunName === item.run_name ? "selected" : ""}" data-run="${item.run_name}">
         <div class="history-main">
-          <div class="title">${item.course || "未命名课程"} · ${item.topic || "未命名主题"}</div>
-          <div class="meta">${item.created_at || ""}</div>
+          <div class="title">${escapeHtml(item.course || "未命名课程")} · ${escapeHtml(item.topic || "未命名主题")}</div>
+          <div class="meta">创建时间：${escapeHtml(item.created_at || item.run_name || "")}</div>
         </div>
-        <button class="history-delete-btn" data-run="${item.run_name}" type="button">删除</button>
       </article>`,
     )
     .join("");
 
-  document.querySelectorAll(".history-item").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const runName = node.getAttribute("data-run") || "";
-      byId("projectSelect").value = runName;
-      await chooseExistingProject();
-    });
-  });
-
-  document.querySelectorAll(".history-delete-btn").forEach((node) => {
-    node.addEventListener("click", async (event) => {
-      event.stopPropagation();
+  el.querySelectorAll(".history-item").forEach((node) => {
+    node.addEventListener("click", () => {
       const runName = node.getAttribute("data-run") || "";
       if (!runName) return;
-      const ok = window.confirm("确认删除该历史记录吗？删除后不可恢复。");
-      if (!ok) return;
-      await deleteHistory(runName);
+      state.selectedRunName = runName;
+      renderProjectOptions(state.runs);
+      setProjectStatus(`已选择学习项目：${runName}，点击“进入已选学习项目”继续。`);
     });
   });
 }
@@ -635,13 +616,12 @@ async function loadProjects() {
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || "加载学习项目失败");
   renderProjectOptions(data.projects || []);
-  renderHistory(data.projects || []);
 }
 
 async function chooseExistingProject() {
-  const runName = byId("projectSelect").value.trim();
+  const runName = state.selectedRunName.trim();
   if (!runName) {
-    setProjectStatus("请先从下拉框选择已有学习项目。");
+    setProjectStatus("请先在学习项目列表中选择一个项目。");
     return;
   }
   const data = await withLoading("正在动态加载已选项目与进度问卷...", async () => {
@@ -663,21 +643,29 @@ async function chooseExistingProject() {
   state.topic = req.topic || "";
   state.selectedRunName = runName;
   state.mode = "existing";
-  state.existingProgressSubmitted = false;
   state.report = data.report || {};
   state.reportMarkdown = data.report_markdown || {};
   const checkins = Array.isArray(data.progress_checkins) ? data.progress_checkins : [];
   const latestProgressCheckin = checkins.find((item) => item?.form_type === "progress")?.checkin || null;
   const latestTestCheckin = checkins.find((item) => item?.form_type === "test")?.checkin || null;
+  state.existingProgressSubmitted = Boolean(latestProgressCheckin);
   state.progressAnswers = {};
   state.testAnswers = {};
   state.testFormTemplate = data.report?.test_form_template || {};
   renderProgressForm(data.report?.progress_form_template || {}, latestProgressCheckin);
   renderTestForm(state.testFormTemplate, latestTestCheckin);
-  byId("progressNotice").textContent = "进入软件请先填写学习进度调查问卷。";
-  setStep("progress");
-  setProjectStatus(`已选择已有项目：${runName}`);
-  setStatus("已加载进度问卷，请先提交学习进度。");
+  if (state.existingProgressSubmitted) {
+    renderReport(state.report, state.reportMarkdown);
+    setActiveTab("profile");
+    byId("progressNotice").textContent = "该项目学习进度问卷已提交过，无需重复填写。";
+    setStep("result");
+    setStatus("已进入学习页面。");
+  } else {
+    byId("progressNotice").textContent = "请先完成一次学习进度问卷提交。";
+    setStep("progress");
+    setStatus("已加载进度问卷，请先提交学习进度。");
+  }
+  setProjectStatus(`已进入学习项目：${runName}`);
 }
 
 function chooseNewProject() {
@@ -690,6 +678,7 @@ function chooseNewProject() {
   state.testAnswers = {};
   state.formMode = "progress";
   state.progressCurrentIndex = 0;
+  renderProjectOptions(state.runs);
   byId("course").value = "";
   byId("topic").value = "";
   byId("dialogue").value = "";
@@ -703,8 +692,8 @@ function chooseNewProject() {
 function goBackToProjectSelection() {
   state.mode = "";
   state.step = "project";
-  state.selectedRunName = "";
   state.existingProgressSubmitted = false;
+  renderProjectOptions(state.runs);
   setStep("project");
   setProjectStatus("请选择已有项目或新建学习项目。");
 }
@@ -719,11 +708,6 @@ function goBackFromProgress() {
 }
 
 function goBackFromResult() {
-  if (state.mode === "existing") {
-    renderProgressForm(state.report?.progress_form_template || state.progressFormTemplate || {});
-    setStep("progress");
-    return;
-  }
   if (state.mode === "new") {
     setStep("task");
     return;
@@ -732,7 +716,10 @@ function goBackFromResult() {
 }
 
 function openTestSurveyStep() {
-  if (state.mode !== "existing") return;
+  if (!state.selectedRunName) {
+    setStatus("未检测到项目记录，请先选择学习项目。");
+    return;
+  }
   const testTemplate = state.testFormTemplate || {};
   if (!Array.isArray(testTemplate.questions) || !testTemplate.questions.length) {
     setStatus("当前暂无测试问卷，可直接跳过，进度问卷不会更新。");
@@ -747,7 +734,7 @@ function openTestSurveyStep() {
 }
 
 function skipTestSurvey() {
-  if (state.mode !== "existing") return;
+  if (!state.selectedRunName) return;
   setStep("result");
   setStatus("已跳过测试问卷，下次进入软件的学习进度问卷保持不变。");
 }
@@ -795,6 +782,9 @@ async function generate() {
   });
 
   if (!data) return;
+  state.selectedRunName = data.run_name || state.selectedRunName;
+  state.testFormTemplate = data.report?.test_form_template || state.testFormTemplate || {};
+  state.progressFormTemplate = data.report?.progress_form_template || state.progressFormTemplate || {};
   renderReport(data.report || {}, data.report_markdown || {});
   setActiveTab("profile");
   setStep("result");
@@ -860,8 +850,8 @@ async function submitProgress() {
 }
 
 async function submitTest() {
-  if (state.mode !== "existing" || !state.selectedRunName) {
-    setStatus("请先选择“已有学习项目”。");
+  if (!state.selectedRunName) {
+    setStatus("请先选择学习项目。");
     return;
   }
   const checkin = collectFormData("test");
@@ -869,9 +859,9 @@ async function submitTest() {
     setStatus("请完成所有必填题目后再提交。");
     return;
   }
-  setStatus("正在提交测试问卷并生成下次进度问卷...");
+  setStatus("正在提交测试问卷并更新进度/测试问卷...");
   const data = await withLoading(
-    "正在请求星火 AI 生成下一次学习进度问卷...",
+    "正在请求星火 AI 生成更新后的进度问卷和测试问卷...",
     async (signal) => {
       const resp = await fetch("/api/progress/checkin", {
         method: "POST",
@@ -902,14 +892,20 @@ async function submitTest() {
   if (data.next_progress_form && typeof data.next_progress_form === "object") {
     state.report.progress_form_template = data.next_progress_form;
     state.progressFormTemplate = data.next_progress_form;
+    state.progressAnswers = {};
+  }
+  if (data.next_test_form && typeof data.next_test_form === "object") {
+    state.report.test_form_template = data.next_test_form;
+    state.testFormTemplate = data.next_test_form;
+    state.testAnswers = {};
   }
   state.reportMarkdown = data.report_markdown || state.reportMarkdown;
   renderReport(state.report, state.reportMarkdown);
   byId("progressNotice").textContent = data.generated_next_form
-    ? "测试问卷已提交，已生成下一次进入软件需填写的学习进度调查问卷。"
-    : "测试问卷已提交，当前未更新下一次学习进度问卷。";
+    ? "测试问卷已提交，进度问卷和测试问卷已按本次结果更新并保存。"
+    : "测试问卷已提交，当前未更新问卷。";
   setStep("result");
-  setStatus(data.generated_next_form ? "测试问卷已提交，下一次进度问卷已更新。" : "测试问卷已提交。");
+  setStatus(data.generated_next_form ? "测试问卷已提交，进度问卷和测试问卷已更新。" : "测试问卷已提交。");
 }
 
 async function askTutor() {
@@ -965,23 +961,6 @@ async function askTutor() {
   renderTutorHistory();
   byId("question").value = "";
   byId("tutorHint").textContent = "已更新记忆，可继续追问。";
-}
-
-async function deleteHistory(runName) {
-  const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`, { method: "DELETE" });
-  const data = await resp.json();
-  if (!resp.ok) {
-    setProjectStatus(data.error || "删除失败");
-    return;
-  }
-  if (state.selectedRunName === runName) {
-    state.selectedRunName = "";
-    state.mode = "";
-    clearResultPanels();
-    setStep("project");
-  }
-  await loadProjects();
-  setProjectStatus(`已删除历史记录：${runName}`);
 }
 
 function initTabs() {
