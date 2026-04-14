@@ -144,14 +144,26 @@ def tutor():
     topic = str(payload.get("topic", "")).strip()
     model = str(payload.get("model", "4.0Ultra")).strip() or "4.0Ultra"
     profile = payload.get("profile")
+    memory_payload = payload.get("memory", [])
     if not isinstance(profile, dict):
         return jsonify({"error": "profile 必须是对象类型"}), 400
+    if not isinstance(memory_payload, list):
+        return jsonify({"error": "memory 必须是数组类型"}), 400
+    memory: list[dict[str, str]] = []
+    for item in memory_payload[:20]:
+        if not isinstance(item, dict):
+            continue
+        q = str(item.get("question", "")).strip()
+        a = str(item.get("answer", "")).strip()
+        if not q and not a:
+            continue
+        memory.append({"question": q, "answer": a})
     if not question or not topic:
         return jsonify({"error": "question、topic 为必填项"}), 400
 
     try:
         system = create_system(model=model)
-        answer = system.tutor(question=question, profile=profile, topic=topic)
+        answer = system.tutor(question=question, profile=profile, topic=topic, memory=memory)
         user_store.save_tutor(username=username, question=question, answer=answer, topic=topic)
     except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
         return jsonify({"error": str(exc)}), 500

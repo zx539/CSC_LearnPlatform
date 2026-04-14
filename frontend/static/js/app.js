@@ -1,5 +1,6 @@
 const state = {
   mode: "", // "", "new", "existing"
+  step: "project", // "project" | "task" | "progress" | "result"
   report: null,
   reportMarkdown: {},
   runs: [],
@@ -9,6 +10,9 @@ const state = {
   progressFormTemplate: {},
   progressAnswers: {},
   progressCurrentIndex: 0,
+  activeController: null,
+  tutorVisible: false,
+  tutorMemory: [],
 };
 
 function byId(id) {
@@ -30,22 +34,48 @@ function setVisible(id, visible) {
   else el.classList.add("hidden-by-gate");
 }
 
-function showLoading(text = "正在请求星火 AI，请稍候...") {
+function setStep(step) {
+  state.step = step;
+  setVisible("projectCard", step === "project");
+  setVisible("taskCard", step === "task");
+  setVisible("progressCard", step === "progress");
+  setVisible("resultCard", step === "result");
+  setVisible("historyCard", step !== "project");
+  setVisible("tutorToggleFab", step !== "project");
+  if (step === "project") {
+    state.tutorVisible = false;
+    setVisible("tutorWidget", false);
+  }
+  byId("mainLayout").classList.toggle("project-centered", step === "project");
+}
+
+function showLoading(text = "正在请求星火 AI，请稍候...", cancellable = false) {
   byId("loadingText").textContent = text;
+  setVisible("cancelRequestBtn", cancellable);
   setVisible("loadingModal", true);
 }
 
 function hideLoading() {
+  state.activeController = null;
+  setVisible("cancelRequestBtn", false);
   setVisible("loadingModal", false);
 }
 
-async function withLoading(text, work) {
-  showLoading(text);
+async function withLoading(text, work, options = {}) {
+  const { cancellable = false } = options;
+  const controller = cancellable ? new AbortController() : null;
+  state.activeController = controller;
+  showLoading(text, cancellable);
   try {
-    return await work();
+    return await work(controller ? controller.signal : undefined);
   } finally {
     hideLoading();
   }
+}
+
+function cancelCurrentRequest() {
+  if (!state.activeController) return;
+  state.activeController.abort();
 }
 
 function escapeHtml(text) {
@@ -55,14 +85,45 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;");
 }
 
+function configureMarkdownRenderer() {
+  if (!window.marked) return;
+  marked.setOptions({
+    gfm: true,
+    breaks: true,
+  });
+}
+
+function enhanceMarkdown(container) {
+  if (!container) return;
+  container.querySelectorAll("table").forEach((table) => {
+    const parent = table.parentElement;
+    if (parent && parent.classList.contains("table-wrap")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    table.parentNode.insertBefore(wrap, table);
+    wrap.appendChild(table);
+  });
+  if (window.hljs) {
+    container.querySelectorAll("pre code").forEach((block) => window.hljs.highlightElement(block));
+  }
+}
+
+function renderMarkdownContent(rawText) {
+  const raw = (rawText || "").trim();
+  if (!raw) return "";
+  return window.marked ? marked.parse(raw) : `<pre>${escapeHtml(raw)}</pre>`;
+}
+
 function renderMarkdown(targetId, markdown, empty = "暂无内容") {
   const raw = (markdown || "").trim();
   if (!raw) {
     byId(targetId).innerHTML = `<p class="muted-text">${empty}</p>`;
     return;
   }
-  const html = window.marked ? marked.parse(raw) : `<pre>${escapeHtml(raw)}</pre>`;
-  byId(targetId).innerHTML = `<article class="resource-item"><div>${html}</div></article>`;
+  const html = renderMarkdownContent(raw);
+  const target = byId(targetId);
+  target.innerHTML = `<article class="resource-item markdown-body"><div>${html}</div></article>`;
+  enhanceMarkdown(target);
 }
 
 function objectToMarkdown(value, level = 0) {
@@ -112,10 +173,11 @@ function renderResources(resources) {
   }
   container.innerHTML = entries
     .map(([name, content]) => {
-      const html = window.marked ? marked.parse(content || "") : `<pre>${escapeHtml(content || "")}</pre>`;
-      return `<article class="resource-item"><h3>${name}</h3><div>${html}</div></article>`;
+      const html = renderMarkdownContent(content || "");
+      return `<article class="resource-item markdown-body"><h3>${name}</h3><div>${html}</div></article>`;
     })
     .join("");
+  enhanceMarkdown(container);
 }
 
 function renderReport(report, reportMarkdown = {}) {
@@ -319,7 +381,6 @@ function collectProgressFormData() {
 
   return {
     valid: requiredErrors.length === 0,
-    missing: requiredErrors,
     payload: {
       topic: state.topic,
       responses,
@@ -327,27 +388,165 @@ function collectProgressFormData() {
   };
 }
 
-function refreshModeUI() {
-  setVisible("projectCard", true);
-  if (!state.mode) {
-    setVisible("taskCard", false);
-    setVisible("progressCard", false);
-    setVisible("resultCard", false);
-    setVisible("historyCard", false);
+function setActiveTab(tabId) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  const tab = document.querySelector(`.tab[data-tab="${tabId}"]`);
+  if (!tab) return;
+  tab.classList.add("active");
+  byId(tabId).classList.add("active");
+}
+
+function clearResultPanels() {
+  state.report = null;
+  state.reportMarkdown = {};
+  byId("profile").innerHTML = "";
+  byId("path").innerHTML = "";
+  byId("evaluate").innerHTML = "";
+  byId("resources").innerHTML = "";
+  byId("aiMarkdown").innerHTML = "";
+  byId("question").value = "";
+  byId("tutorHint").textContent = "可查看并延续之前的会话记忆。";
+  renderTutorHistory();
+}
+
+function getTutorMemoryStorageKey() {
+  const userNameText = document.querySelector(".user-bar span")?.textContent || "";
+  const userName = userNameText.replace("👤", "").trim() || "anonymous";
+  return `tutor-memory:${userName}`;
+}
+
+function renderTutorMemoryStatus() {
+  const el = byId("tutorMemoryStatus");
+  if (!el) return;
+  el.textContent = `当前记忆：${state.tutorMemory.length} 条`;
+}
+
+function persistTutorMemory() {
+  window.localStorage.setItem(getTutorMemoryStorageKey(), JSON.stringify(state.tutorMemory));
+  renderTutorMemoryStatus();
+}
+
+function renderTutorHistory() {
+  const historyEl = byId("tutorHistory");
+  if (!historyEl) return;
+  if (!state.tutorMemory.length) {
+    historyEl.innerHTML = "<p class='tutor-history-empty'>暂无历史记忆，开始提问后会自动记录。</p>";
     return;
   }
-  if (state.mode === "new") {
-    setVisible("taskCard", true);
-    setVisible("progressCard", false);
-    setVisible("resultCard", true);
-    setVisible("historyCard", true);
+  historyEl.innerHTML = state.tutorMemory
+    .map(
+      (item) => `
+      <article class="tutor-msg user">
+        <div class="tutor-msg-role">你</div>
+        <div class="tutor-msg-content">${escapeHtml(item.question || "")}</div>
+      </article>
+      <article class="tutor-msg ai">
+        <div class="tutor-msg-role">智能辅导</div>
+        <div class="tutor-msg-content markdown-body">${renderMarkdownContent(item.answer || "")}</div>
+      </article>`,
+    )
+    .join("");
+  enhanceMarkdown(historyEl);
+  historyEl.scrollTop = historyEl.scrollHeight;
+}
+
+function restoreTutorMemory() {
+  const raw = window.localStorage.getItem(getTutorMemoryStorageKey());
+  if (!raw) {
+    state.tutorMemory = [];
+    renderTutorMemoryStatus();
+    renderTutorHistory();
     return;
   }
-  // existing mode
-  setVisible("taskCard", false);
-  setVisible("progressCard", true);
-  setVisible("resultCard", state.existingProgressSubmitted);
-  setVisible("historyCard", state.existingProgressSubmitted);
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error("智能辅导记忆格式错误，请先清除浏览器本地记忆。");
+  }
+  state.tutorMemory = parsed
+    .filter((item) => item && typeof item.question === "string" && typeof item.answer === "string")
+    .slice(-20);
+  renderTutorMemoryStatus();
+  renderTutorHistory();
+}
+
+function clearTutorMemory() {
+  state.tutorMemory = [];
+  persistTutorMemory();
+  renderTutorHistory();
+  byId("tutorHint").textContent = "记忆已清空，接下来将从新会话开始。";
+}
+
+function openTutorWidget() {
+  state.tutorVisible = true;
+  const widget = byId("tutorWidget");
+  widget.classList.remove("minimized");
+  renderTutorHistory();
+  setVisible("tutorWidget", true);
+}
+
+function hideTutorWidget() {
+  state.tutorVisible = false;
+  setVisible("tutorWidget", false);
+}
+
+function toggleTutorMinimized() {
+  byId("tutorWidget").classList.toggle("minimized");
+}
+
+function initTutorWidgetDrag() {
+  const widget = byId("tutorWidget");
+  const header = byId("tutorWidgetHeader");
+  if (!widget || !header) return;
+
+  let dragging = false;
+  let pointerId = null;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const start = (clientX, clientY) => {
+    const rect = widget.getBoundingClientRect();
+    dragging = true;
+    offsetX = clientX - rect.left;
+    offsetY = clientY - rect.top;
+    widget.style.right = "auto";
+    widget.style.bottom = "auto";
+    widget.style.left = `${rect.left}px`;
+    widget.style.top = `${rect.top}px`;
+  };
+
+  const move = (clientX, clientY) => {
+    if (!dragging) return;
+    const width = widget.offsetWidth;
+    const height = widget.offsetHeight;
+    const maxX = Math.max(0, window.innerWidth - width);
+    const maxY = Math.max(0, window.innerHeight - height);
+    const nextX = Math.min(maxX, Math.max(0, clientX - offsetX));
+    const nextY = Math.min(maxY, Math.max(0, clientY - offsetY));
+    widget.style.left = `${nextX}px`;
+    widget.style.top = `${nextY}px`;
+  };
+
+  const end = () => {
+    dragging = false;
+    pointerId = null;
+  };
+
+  header.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (event.target.closest("button")) return;
+    event.preventDefault();
+    pointerId = event.pointerId;
+    header.setPointerCapture(pointerId);
+    start(event.clientX, event.clientY);
+  });
+  header.addEventListener("pointermove", (event) => {
+    if (!dragging || event.pointerId !== pointerId) return;
+    event.preventDefault();
+    move(event.clientX, event.clientY);
+  });
+  header.addEventListener("pointerup", end);
+  header.addEventListener("pointercancel", end);
 }
 
 async function loadProjects() {
@@ -364,12 +563,17 @@ async function chooseExistingProject() {
     setProjectStatus("请先从下拉框选择已有学习项目。");
     return;
   }
-  const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`);
-  const data = await resp.json();
-  if (!resp.ok) {
-    setProjectStatus(data.error || "加载已有项目失败");
-    return;
-  }
+  const data = await withLoading("正在动态加载已选项目与进度问卷...", async () => {
+    const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`);
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || "加载已有项目失败");
+    return result;
+  }).catch((err) => {
+    setProjectStatus(err.message);
+    return null;
+  });
+  if (!data) return;
+
   const req = data.request || {};
   byId("course").value = req.course || "";
   byId("topic").value = req.topic || "";
@@ -379,34 +583,51 @@ async function chooseExistingProject() {
   state.selectedRunName = runName;
   state.mode = "existing";
   state.existingProgressSubmitted = false;
-  renderReport(data.report || {}, data.report_markdown || {});
+  state.report = data.report || {};
+  state.reportMarkdown = data.report_markdown || {};
   renderProgressForm(data.report?.progress_form_template || {}, data.progress_checkins?.[0]?.checkin || null);
-  byId("progressNotice").textContent = "请先填写学习进度并提交，提交后显示该项目完整学习内容。";
-  refreshModeUI();
+  byId("progressNotice").textContent = "请先填写学习进度并提交，提交后进入学习画像与完整方案页面。";
+  setStep("progress");
   setProjectStatus(`已选择已有项目：${runName}`);
+  setStatus("已加载进度问卷，请先提交学习进度。");
 }
 
 function chooseNewProject() {
   state.mode = "new";
   state.selectedRunName = "";
-  state.existingProgressSubmitted = true;
+  state.existingProgressSubmitted = false;
   state.progressFormTemplate = {};
   state.progressAnswers = {};
   state.progressCurrentIndex = 0;
   byId("course").value = "";
   byId("topic").value = "";
   byId("dialogue").value = "";
-  byId("question").value = "";
-  byId("tutorAnswer").innerHTML = "";
-  state.report = null;
-  state.reportMarkdown = {};
-  byId("profile").innerHTML = "";
-  byId("path").innerHTML = "";
-  byId("evaluate").innerHTML = "";
-  byId("resources").innerHTML = "";
-  byId("aiMarkdown").innerHTML = "";
-  refreshModeUI();
-  setProjectStatus("已进入新建学习项目模式，请填写任务输入后生成学习画像。");
+  byId("model").value = "4.0Ultra";
+  clearResultPanels();
+  setStep("task");
+  setProjectStatus("已进入新建学习项目模式，请填写信息后生成学习画像。");
+  setStatus("等待输入");
+}
+
+function goBackToProjectSelection() {
+  state.mode = "";
+  state.step = "project";
+  state.selectedRunName = "";
+  state.existingProgressSubmitted = false;
+  setStep("project");
+  setProjectStatus("请选择已有项目或新建学习项目。");
+}
+
+function goBackFromResult() {
+  if (state.mode === "existing") {
+    setStep("progress");
+    return;
+  }
+  if (state.mode === "new") {
+    setStep("task");
+    return;
+  }
+  setStep("project");
 }
 
 async function generate() {
@@ -422,26 +643,39 @@ async function generate() {
     model: byId("model").value.trim() || "4.0Ultra",
   };
   if (!payload.course || !payload.topic || !payload.dialogue) {
-    setStatus("请填写必填项：课程、主题、画像对话");
+    setStatus("请填写必填项：课程、主题、画像对话。");
     return;
   }
   state.topic = payload.topic;
   setStatus("正在生成学习方案...");
-  const data = await withLoading("正在上传请求到星火 AI 并生成学习方案...", async () => {
-    const resp = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const result = await resp.json();
-    if (!resp.ok) throw new Error(result.error || "生成失败");
-    return result;
-  }).catch((err) => {
+
+  const data = await withLoading(
+    "正在请求星火 AI 生成学习画像与学习方案...",
+    async (signal) => {
+      const resp = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal,
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "生成失败");
+      return result;
+    },
+    { cancellable: true },
+  ).catch((err) => {
+    if (err?.name === "AbortError") {
+      setStatus("已取消本次星火请求。");
+      return null;
+    }
     setStatus(`错误：${err.message}`);
     return null;
   });
+
   if (!data) return;
   renderReport(data.report || {}, data.report_markdown || {});
+  setActiveTab("profile");
+  setStep("result");
   setStatus(`生成完成：${data.output_dir}`);
   await loadProjects();
 }
@@ -460,73 +694,101 @@ async function submitProgress() {
     setStatus("请完成所有必填题目后再提交。");
     return;
   }
-  setStatus("正在提交学习进度并调用星火评估...");
-  const data = await withLoading("正在上传学习进度到星火 AI 并等待评估...", async () => {
-    const resp = await fetch("/api/progress/checkin", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        run_name: state.selectedRunName,
-        model: byId("model").value.trim() || "4.0Ultra",
-        checkin: checkin.payload,
-      }),
-    });
-    const result = await resp.json();
-    if (!resp.ok) throw new Error(result.error || "提交失败");
-    return result;
-  }).catch((err) => {
+  setStatus("正在提交学习进度并请求星火评估...");
+
+  const data = await withLoading(
+    "正在请求星火 AI 评估学习进度...",
+    async (signal) => {
+      const resp = await fetch("/api/progress/checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          run_name: state.selectedRunName,
+          model: byId("model").value.trim() || "4.0Ultra",
+          checkin: checkin.payload,
+        }),
+        signal,
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "提交失败");
+      return result;
+    },
+    { cancellable: true },
+  ).catch((err) => {
+    if (err?.name === "AbortError") {
+      setStatus("已取消本次星火评估请求。");
+      return null;
+    }
     setStatus(`学习进度提交失败：${err.message}`);
     return null;
   });
-  if (!data) return;
 
+  if (!data) return;
   if (state.report) {
     state.report.evaluation = data.evaluation || {};
     state.reportMarkdown = data.report_markdown || state.reportMarkdown;
     renderReport(state.report, state.reportMarkdown);
   }
   state.existingProgressSubmitted = true;
-  byId("progressNotice").textContent = "学习进度已提交并完成评估，可查看完整学习内容。";
-  refreshModeUI();
-  setStatus("学习进度已提交，学习评估已更新。");
+  byId("progressNotice").textContent = "学习进度已提交并完成评估。";
+  setActiveTab("profile");
+  setStep("result");
+  setStatus("学习进度已提交，已进入学习画像页面。");
 }
 
 async function askTutor() {
   if (!state.report || !state.report.profile) {
-    byId("tutorAnswer").textContent = "请先生成或加载学习方案。";
+    byId("tutorHint").textContent = "请先生成或加载学习方案。";
     return;
   }
   if (state.mode === "existing" && !state.existingProgressSubmitted) {
-    byId("tutorAnswer").textContent = "请先提交该项目学习进度，再进行智能辅导。";
+    byId("tutorHint").textContent = "请先提交该项目学习进度，再进行智能辅导。";
     return;
   }
   const question = byId("question").value.trim();
   if (!question) {
-    byId("tutorAnswer").textContent = "请输入问题。";
+    byId("tutorHint").textContent = "请输入问题。";
     return;
   }
+  byId("tutorHint").textContent = "正在生成辅导答案...";
 
-  const data = await withLoading("正在上传问题到星火 AI 并生成辅导答案...", async () => {
-    const resp = await fetch("/api/tutor", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question,
-        topic: state.topic,
-        model: byId("model").value.trim() || "4.0Ultra",
-        profile: state.report.profile,
-      }),
-    });
-    const result = await resp.json();
-    if (!resp.ok) throw new Error(result.error || "辅导失败");
-    return result;
-  }).catch((err) => {
-    byId("tutorAnswer").textContent = `错误：${err.message}`;
+  const data = await withLoading(
+    "正在请求星火 AI 生成辅导答案...",
+    async (signal) => {
+      const resp = await fetch("/api/tutor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question,
+          topic: state.topic,
+          model: byId("model").value.trim() || "4.0Ultra",
+          profile: state.report.profile,
+          memory: state.tutorMemory,
+        }),
+        signal,
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "辅导失败");
+      return result;
+    },
+    { cancellable: true },
+  ).catch((err) => {
+    if (err?.name === "AbortError") {
+      byId("tutorHint").textContent = "已取消本次星火辅导请求。";
+      return null;
+    }
+    byId("tutorHint").textContent = `错误：${err.message}`;
     return null;
   });
   if (!data) return;
-
-  byId("tutorAnswer").innerHTML = window.marked ? marked.parse(data.answer || "") : escapeHtml(data.answer || "");
+  state.tutorMemory.push({ question, answer: data.answer || "" });
+  if (state.tutorMemory.length > 20) {
+    state.tutorMemory = state.tutorMemory.slice(-20);
+  }
+  persistTutorMemory();
+  renderTutorHistory();
+  byId("question").value = "";
+  byId("tutorHint").textContent = "已更新记忆，可继续追问。";
 }
 
 async function deleteHistory(runName) {
@@ -539,10 +801,8 @@ async function deleteHistory(runName) {
   if (state.selectedRunName === runName) {
     state.selectedRunName = "";
     state.mode = "";
-    state.existingProgressSubmitted = false;
-    state.report = null;
-    state.reportMarkdown = {};
-    refreshModeUI();
+    clearResultPanels();
+    setStep("project");
   }
   await loadProjects();
   setProjectStatus(`已删除历史记录：${runName}`);
@@ -562,13 +822,33 @@ function initTabs() {
 }
 
 async function boot() {
+  configureMarkdownRenderer();
   initTabs();
+  initTutorWidgetDrag();
   byId("chooseExistingBtn").addEventListener("click", chooseExistingProject);
   byId("chooseNewBtn").addEventListener("click", chooseNewProject);
   byId("generateBtn").addEventListener("click", generate);
   byId("submitProgressBtn").addEventListener("click", submitProgress);
   byId("askBtn").addEventListener("click", askTutor);
-  refreshModeUI();
+  byId("backFromTaskBtn").addEventListener("click", goBackToProjectSelection);
+  byId("backFromProgressBtn").addEventListener("click", goBackToProjectSelection);
+  byId("backFromResultBtn").addEventListener("click", goBackFromResult);
+  byId("cancelRequestBtn").addEventListener("click", cancelCurrentRequest);
+  byId("tutorToggleFab").addEventListener("click", openTutorWidget);
+  byId("openTutorWidgetInlineBtn").addEventListener("click", openTutorWidget);
+  byId("tutorWidgetCloseBtn").addEventListener("click", hideTutorWidget);
+  byId("tutorWidgetMinBtn").addEventListener("click", toggleTutorMinimized);
+  byId("clearTutorMemoryBtn").addEventListener("click", clearTutorMemory);
+  try {
+    restoreTutorMemory();
+  } catch (err) {
+    state.tutorMemory = [];
+    renderTutorMemoryStatus();
+    renderTutorHistory();
+    byId("tutorHint").textContent = `智能辅导记忆读取失败：${err.message}`;
+  }
+
+  setStep("project");
   try {
     await loadProjects();
     setProjectStatus("请选择已有项目或新建学习项目。");

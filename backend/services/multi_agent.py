@@ -410,12 +410,26 @@ class MultiAgentLearningSystem:
         )
         return extract_json_block(raw)
 
-    def tutor(self, question: str, profile: Dict, topic: str) -> str:
+    def tutor(self, question: str, profile: Dict, topic: str, memory: List[Dict[str, str]] | None = None) -> str:
         system = (
             "你是智能辅导智能体。回答结构: 先结论，再原理，再例子。"
             "若用户基础薄弱，优先类比与步骤化表达。"
         )
-        user = f"学习主题: {topic}\n学生画像: {json.dumps(profile, ensure_ascii=False)}\n问题: {question}"
+        memory = memory or []
+        memory_lines: List[str] = []
+        for idx, item in enumerate(memory[-20:], start=1):
+            q = _stringify(item.get("question", ""))
+            a = _stringify(item.get("answer", ""))
+            if not q and not a:
+                continue
+            memory_lines.append(f"{idx}. 用户问题: {q}\n   你的回答: {a}")
+        memory_block = "\n".join(memory_lines) if memory_lines else "无"
+        user = (
+            f"学习主题: {topic}\n"
+            f"学生画像: {json.dumps(profile, ensure_ascii=False)}\n"
+            f"历史对话记忆:\n{memory_block}\n"
+            f"当前问题: {question}"
+        )
         return self.spark.chat([{"role": "system", "content": system}, {"role": "user", "content": user}], temperature=0.4)
 
     def evaluate_learning(self, progress_payload: Dict, profile: Dict, path: Dict) -> Dict:

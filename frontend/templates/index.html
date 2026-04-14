@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>个性化学习多智能体系统</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
 </head>
 <body>
@@ -21,10 +22,11 @@
       {% endif %}
     </header>
 
-    <section class="layout">
+    <section id="mainLayout" class="layout project-centered">
       <div class="left-col">
-        <section id="projectCard" class="card">
+        <section id="projectCard" class="card project-card">
           <h2>学习项目选择</h2>
+          <p class="muted-text">请选择“已有项目”或“新建项目”，系统将按步骤动态加载后续内容。</p>
           <div class="grid">
             <label>
               已有学习项目
@@ -69,6 +71,7 @@
           </label>
 
           <div class="actions">
+            <button id="backFromTaskBtn" class="btn-light" type="button">← 返回项目选择</button>
             <button id="generateBtn" class="btn-primary">🚀 生成个性化学习方案</button>
             <span id="status" class="status">等待输入</span>
           </div>
@@ -79,18 +82,22 @@
           <div id="progressNotice" class="status">尚未加载进度表单</div>
           <div id="progressFormWrap" class="progress-form-wrap"></div>
           <div class="actions">
+            <button id="backFromProgressBtn" class="btn-light" type="button">← 返回项目选择</button>
             <button id="submitProgressBtn" class="btn-secondary">📝 提交学习进度并更新评估</button>
           </div>
         </section>
 
         <section id="resultCard" class="card">
+          <div class="actions result-head-actions">
+            <button id="backFromResultBtn" class="btn-light" type="button">← 返回上一步</button>
+            <button id="openTutorWidgetInlineBtn" class="btn-secondary" type="button">💬 打开智能辅导</button>
+          </div>
           <nav class="tabs">
             <button class="tab active" data-tab="profile">学习画像</button>
             <button class="tab" data-tab="aiMarkdown">AI返回(MD)</button>
             <button class="tab" data-tab="resources">学习资源</button>
             <button class="tab" data-tab="path">学习路径</button>
             <button class="tab" data-tab="evaluate">学习评估</button>
-            <button class="tab" data-tab="tutor">智能辅导</button>
           </nav>
 
           <div class="tab-panels">
@@ -99,13 +106,6 @@
             <section id="resources" class="panel"></section>
             <section id="path" class="panel"></section>
             <section id="evaluate" class="panel"></section>
-            <section id="tutor" class="panel">
-              <div class="tutor-wrap">
-                <textarea id="question" rows="3" placeholder="输入学习中遇到的问题..."></textarea>
-                <button id="askBtn" class="btn-secondary">提问</button>
-                <article id="tutorAnswer" class="answer"></article>
-              </div>
-            </section>
           </div>
         </section>
       </div>
@@ -116,14 +116,39 @@
     </section>
   </main>
 
+  <button id="tutorToggleFab" class="tutor-fab hidden-by-gate" type="button">💬 智能辅导</button>
+  <section id="tutorWidget" class="tutor-widget hidden-by-gate">
+    <header id="tutorWidgetHeader" class="tutor-widget-header">
+      <strong>智能辅导助手</strong>
+      <div class="tutor-widget-actions">
+        <button id="tutorWidgetMinBtn" class="btn-light tutor-mini-btn" type="button">最小化</button>
+        <button id="tutorWidgetCloseBtn" class="btn-light tutor-mini-btn" type="button">隐藏</button>
+      </div>
+    </header>
+    <div class="tutor-widget-body">
+      <div class="tutor-memory-bar">
+        <span id="tutorMemoryStatus" class="muted-text">当前记忆：0 条</span>
+        <button id="clearTutorMemoryBtn" class="btn-light tutor-mini-btn" type="button">清除记忆</button>
+      </div>
+      <section id="tutorHistory" class="tutor-history"></section>
+      <div class="tutor-input-wrap">
+        <textarea id="question" rows="3" placeholder="输入学习中遇到的问题..."></textarea>
+        <button id="askBtn" class="btn-secondary" type="button">提问</button>
+      </div>
+      <p id="tutorHint" class="status">可查看并延续之前的会话记忆。</p>
+    </div>
+  </section>
+
   <div id="loadingModal" class="loading-modal hidden-by-gate" aria-live="polite" aria-busy="true">
     <div class="loading-modal-content">
       <div class="loading-spinner"></div>
       <p id="loadingText">正在请求星火 AI，请稍候...</p>
+      <button id="cancelRequestBtn" class="btn-light hidden-by-gate" type="button">取消请求</button>
     </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/lib/highlight.min.js"></script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>
