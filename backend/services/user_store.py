@@ -77,29 +77,41 @@ class UserStore:
         output_dir: str,
         report_markdown: Dict[str, str] | None = None,
     ):
+        created_at = _utc_now()
         run_payload = {
             "run_name": run_name,
-            "created_at": _utc_now(),
+            "created_at": created_at,
             "request": request_payload,
             "output_dir": output_dir,
             "report": report,
             "report_markdown": report_markdown or {},
         }
         self._write_json(self._run_file(username, run_name), run_payload)
-        self._write_json(self._latest_file(username), run_payload)
+        self._write_json(self._latest_file(username), {"run_name": run_name, "updated_at": created_at})
 
         history = self._read_json(self._history_file(username), [])
         history.insert(
             0,
             {
                 "run_name": run_name,
-                "created_at": run_payload["created_at"],
+                "created_at": created_at,
                 "course": request_payload.get("course", ""),
                 "topic": request_payload.get("topic", ""),
                 "output_dir": output_dir,
             },
         )
         self._write_json(self._history_file(username), history[:100])
+
+    def _resolve_latest_run_name(self, username: str) -> str:
+        payload = self._read_json(self._latest_file(username), None)
+        if not isinstance(payload, dict):
+            return ""
+        run_name = str(payload.get("run_name", "")).strip()
+        if run_name:
+            return run_name
+        # 兼容旧格式（latest_report.json 内直接存完整 run_payload）
+        legacy_run_name = str(payload.get("run_name", "")).strip()
+        return legacy_run_name
 
     def list_runs(self, username: str) -> List[Dict[str, Any]]:
         return self._read_json(self._history_file(username), [])
@@ -111,17 +123,29 @@ class UserStore:
         return self._read_json(path, None)
 
     def get_latest_report(self, username: str) -> Dict[str, Any] | None:
-        payload = self._read_json(self._latest_file(username), None)
-        return payload
+        latest_payload = self._read_json(self._latest_file(username), None)
+        if not isinstance(latest_payload, dict):
+            return None
+        # 兼容旧格式：latest_report.json 直接存完整 run_payload
+        if "report" in latest_payload and "request" in latest_payload:
+            run_name = str(latest_payload.get("run_name", "")).strip()
+            if run_name:
+                self._write_json(self._latest_file(username), {"run_name": run_name, "updated_at": _utc_now()})
+            return latest_payload
+        run_name = str(latest_payload.get("run_name", "")).strip()
+        if not run_name:
+            return None
+        return self.get_run(username, run_name)
 
     def has_latest_report(self, username: str) -> bool:
-        return self._latest_file(username).exists()
+        return self.get_latest_report(username) is not None
 
     def update_latest_report(self, username: str, payload: Dict[str, Any]):
-        self._write_json(self._latest_file(username), payload)
         run_name = str(payload.get("run_name", "")).strip()
-        if run_name:
-            self._write_json(self._run_file(username, run_name), payload)
+        if not run_name:
+            raise ValueError("更新 latest_report 失败：payload 缺少 run_name")
+        self._write_json(self._run_file(username, run_name), payload)
+        self._write_json(self._latest_file(username), {"run_name": run_name, "updated_at": _utc_now()})
 
     def update_run(self, username: str, run_name: str, payload: Dict[str, Any]):
         self._write_json(self._run_file(username, run_name), payload)
@@ -142,10 +166,7 @@ class UserStore:
         self._write_json(self._progress_file(username), filtered_logs)
 
         latest_path = self._latest_file(username)
-        latest = self._read_json(latest_path, None)
-        latest_run_name = ""
-        if isinstance(latest, dict):
-            latest_run_name = str(latest.get("run_name", "")).strip()
+        latest_run_name = self._resolve_latest_run_name(username)
 
         if latest_run_name == run_name:
             next_run_name = ""
@@ -153,7 +174,7 @@ class UserStore:
                 next_run_name = str(new_history[0].get("run_name", "")).strip()
             next_payload = self.get_run(username, next_run_name) if next_run_name else None
             if isinstance(next_payload, dict):
-                self._write_json(latest_path, next_payload)
+                self._write_json(latest_path, {"run_name": next_run_name, "updated_at": _utc_now()})
             elif latest_path.exists():
                 latest_path.unlink()
 

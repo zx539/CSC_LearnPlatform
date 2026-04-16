@@ -1,0 +1,94 @@
+[
+  {
+    "created_at": "2026-04-16T07:57:31Z",
+    "run_name": "run_20260416_155251",
+    "form_type": "progress",
+    "checkin": {
+      "topic": "傅里叶变换",
+      "questionnaire_type": "progress",
+      "responses": [
+        {
+          "question_id": "stage_1_quiz_1",
+          "type": "single_choice",
+          "answer": "能解释原理"
+        },
+        {
+          "question_id": "stage_1_quiz_2",
+          "type": "text",
+          "answer": "测试"
+        },
+        {
+          "question_id": "stage_1_completion",
+          "type": "single_choice",
+          "answer": "26-50%"
+        },
+        {
+          "question_id": "stage_1_difficulty",
+          "type": "scale",
+          "answer": "4"
+        },
+        {
+          "question_id": "stage_1_blocker",
+          "type": "text",
+          "answer": "测试"
+        }
+      ]
+    },
+    "evaluation": {
+      "summary": "学习进度评估：",
+      "overall_score": 0,
+      "stage_progress": [
+        {
+          "stage_no": 1,
+          "goal": "掌握傅里叶变换的基本概念和原理，能够熟练应用在信号处理中",
+          "completion_rate": 0,
+          "quality_score": 0,
+          "issues": [
+            "对傅里叶变换的数学推导不熟悉"
+          ],
+          "next_actions": [
+            "观看傅里叶变换的基础课程视频教程"
+          ]
+        },
+        {
+          "stage_no": 2,
+          "goal": "理解傅里叶变换在通信系统中的作用和重要性",
+          "completion_rate": 0,
+          "quality_score": 0,
+          "issues": [
+            "缺乏实际信号处理的经验"
+          ],
+          "next_actions": [
+            "阅读关于傅里叶变换在通信系统中应用的拓展阅读材料"
+          ]
+        },
+        {
+          "stage_no": 3,
+          "goal": "学会使用傅里叶变换进行信号分析",
+          "completion_rate": 0,
+          "quality_score": 0,
+          "issues": [
+            "核心概念之间的联系不够清晰，知识点容易割裂"
+          ],
+          "next_actions": [
+            "完成分层练习题，包括理论知识和实践操作部分"
+          ]
+        }
+      ],
+      "study_efficiency": {
+        "planned_hours": 1,
+        "actual_hours": 0,
+        "deviation_note": "学习时长基本符合计划，可继续保持节奏。"
+      },
+      "risk_alerts": [
+        "若仅停留在阅读，缺少主动练习，知识迁移能力会提升缓慢。",
+        "若不做阶段复盘，错误模式可能在后续任务中重复出现。"
+      ],
+      "next_week_targets": [
+        "观看傅里叶变换的基础课程视频教程",
+        "阅读关于傅里叶变换在通信系统中应用的拓展阅读材料",
+        "完成分层练习题，包括理论知识和实践操作部分"
+      ]
+    }
+  }
+]

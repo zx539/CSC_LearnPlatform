@@ -1,5 +1,287 @@
 [
   {
+    "created_at": "2026-04-16T05:34:12Z",
+    "run_name": "run_20260416_133058",
+    "form_type": "progress",
+    "checkin": {
+      "topic": "傅里叶变换",
+      "questionnaire_type": "progress",
+      "responses": [
+        {
+          "question_id": "stage_1_quiz_1",
+          "type": "single_choice",
+          "answer": "仅了解名词"
+        },
+        {
+          "question_id": "stage_1_quiz_2",
+          "type": "text",
+          "answer": "1"
+        },
+        {
+          "question_id": "stage_1_completion",
+          "type": "single_choice",
+          "answer": "26-50%"
+        },
+        {
+          "question_id": "stage_1_difficulty",
+          "type": "scale",
+          "answer": "3"
+        },
+        {
+          "question_id": "stage_1_blocker",
+          "type": "text",
+          "answer": "1"
+        }
+      ]
+    },
+    "evaluation": {
+      "progress": {
+        "topic": "傅里叶变换",
+        "questionnaire_type": "progress",
+        "responses": [
+          {
+            "question_id": "stage_1_quiz_1",
+            "type": "single_choice",
+            "answer": "仅了解名词"
+          },
+          {
+            "question_id": "stage_1_quiz_2",
+            "type": "text",
+            "answer": "1"
+          },
+          {
+            "question_id": "stage_1_completion",
+            "type": "single_choice",
+            "answer": "26-50%"
+          },
+          {
+            "question_id": "stage_1_difficulty",
+            "type": "scale",
+            "answer": "3"
+          },
+          {
+            "question_id": "stage_1_blocker",
+            "type": "text",
+            "answer": "1"
+          }
+        ],
+        "profile": {
+          "profile_version": "v1",
+          "profile": {
+            "major": "通信工程",
+            "course": "信号与系统",
+            "learning_goals": [
+              "理解傅里叶变换的基本概念和原理",
+              "掌握傅里叶变换在信号处理中的应用",
+              "能够独立进行傅里叶变换的计算和分析"
+            ],
+            "knowledge_level": "高中及以上数学知识",
+            "cognitive_style": "视觉型",
+            "weak_points": [
+              "需要提高对复杂数学公式的理解能力",
+              "核心概念之间的联系不够清晰，知识点容易割裂。",
+              "做题时步骤不稳定，常出现审题不全或公式调用不准确。"
+            ],
+            "learning_pace": "适中",
+            "preferred_modalities": [
+              "视频讲解",
+              "实践操作",
+              "图解与结构化大纲"
+            ],
+            "weekly_available_hours": 6,
+            "confidence": 0.72,
+            "next_questions": [
+              "傅里叶变换在通信工程中有哪些应用？",
+              "如何通过傅里叶变换解决通信系统中的信号干扰问题？",
+              "傅里叶变换在数字信号处理中的重要性是什么？"
+            ]
+          },
+          "path": {
+            "path_name": "信号与系统",
+            "total_stages": 1,
+            "stages": [
+              {
+                "stage_no": 1,
+                "goal": "",
+                "actions": [
+                  "观看傅里叶变换的入门视频讲解"
+                ],
+                "recommended_resources": [
+                  "课程讲解文档"
+                ],
+                "checkpoint": "理解傅里叶变换的定义及其在信号处理中的重要性"
+              }
+            ],
+            "output_schema": {
+              "summary": "",
+              "overall_score": 0,
+              "stage_progress": [
+                {
+                  "stage_no": 1,
+                  "goal": "",
+                  "completion_rate": 0,
+                  "quality_score": 0,
+                  "issues": [],
+                  "next_actions": []
+                }
+              ],
+              "study_efficiency": {
+                "planned_hours": 0,
+                "actual_hours": 0,
+                "deviation_note": ""
+              },
+              "risk_alerts": [],
+              "next_week_targets": []
+            }
+          }
+        },
+        "study_efficiency": {
+          "planned_hours": 0,
+          "actual_hours": 0,
+          "deviation_note": ""
+        },
+        "risk_alerts": [],
+        "next_week_targets": []
+      }
+    }
+  },
+  {
+    "created_at": "2026-04-15T15:31:03Z",
+    "run_name": "run_20260415_230702",
+    "form_type": "progress",
+    "checkin": {
+      "topic": "c语言中的指针",
+      "questionnaire_type": "progress",
+      "responses": [
+        {
+          "question_id": "stage_1_quiz_1",
+          "type": "single_choice",
+          "answer": "能解释原理"
+        },
+        {
+          "question_id": "stage_1_quiz_2",
+          "type": "text",
+          "answer": "访问某个指针的物理地址"
+        },
+        {
+          "question_id": "stage_1_completion",
+          "type": "single_choice",
+          "answer": "51-75%"
+        },
+        {
+          "question_id": "stage_1_difficulty",
+          "type": "scale",
+          "answer": "4"
+        },
+        {
+          "question_id": "stage_1_blocker",
+          "type": "text",
+          "answer": "解引用符号"
+        }
+      ]
+    },
+    "evaluation": {
+      "progress": {
+        "topic": "c语言中的指针",
+        "questionnaire_type": "progress",
+        "responses": [
+          {
+            "question_id": "stage_1_quiz_1",
+            "type": "single_choice",
+            "answer": "能解释原理"
+          },
+          {
+            "question_id": "stage_1_quiz_2",
+            "type": "text",
+            "answer": "访问某个指针的物理地址"
+          },
+          {
+            "question_id": "stage_1_completion",
+            "type": "single_choice",
+            "answer": "51-75%"
+          },
+          {
+            "question_id": "stage_1_difficulty",
+            "type": "scale",
+            "answer": "4"
+          },
+          {
+            "question_id": "stage_1_blocker",
+            "type": "text",
+            "answer": "解引用符号"
+          }
+        ],
+        "profile": {
+          "profile_version": "v1",
+          "profile": {
+            "major": "计算机科学",
+            "course": "C语言程序设计",
+            "learning_goals": [
+              "理解指针的概念和作用",
+              "掌握指针的基本操作，如赋值、解引用、指针运算等",
+              "能够使用指针解决实际编程问题"
+            ],
+            "knowledge_level": "初级",
+            "cognitive_style": "视觉学习者",
+            "weak_points": [],
+            "learning_pace": "快速",
+            "preferred_modalities": [
+              "视频教程",
+              "实践练习"
+            ],
+            "weekly_available_hours": 2
+          },
+          "confidence": 0.8,
+          "next_questions": [
+            {
+              "question": "在C语言中，如何定义一个指向整数的指针？",
+              "answer": "int *ptr;"
+            },
+            {
+              "question": "指针变量`a`和`b`分别指向两个不同的整型变量，如果`a = b + 1`，那么`a`的值是多少？",
+              "answer": "a的值是2。因为`b`的值是1，所以`a = b + 1`的结果就是`a = 1 + 1 = 2`。"
+            }
+          ]
+        },
+        "path": {
+          "path_name": "c语言中的指针",
+          "total_stages": 1,
+          "stages": [
+            {
+              "stage_no": 1,
+              "goal": "",
+              "completion_rate": 0,
+              "quality_score": 0,
+              "issues": [],
+              "next_actions": []
+            }
+          ]
+        },
+        "output_schema": {
+          "summary": "",
+          "overall_score": 0,
+          "stage_progress": [
+            {
+              "stage_no": 1,
+              "goal": "",
+              "completion_rate": 0,
+              "quality_score": 0,
+              "issues": [],
+              "next_actions": []
+            }
+          ]
+        },
+        "study_efficiency": {
+          "planned_hours": 0,
+          "actual_hours": 0,
+          "deviation_note": ""
+        },
+        "risk_alerts": [],
+        "next_week_targets": []
+      }
+    }
+  },
+  {
     "created_at": "2026-04-14T14:13:28Z",
     "run_name": "run_20260414_215243",
     "form_type": "progress",
@@ -125,74 +407,6 @@
         "夯实阶段1基础：完成机械学习核心概念清单梳理，补充核心术语的定义与应用场景，完成阶段1基础概念测试题，确保正确率不低于80%，达成阶段1入门目标",
         "提升学习投入度：按照每周14小时的计划时长分配学习时间，优先保证阶段1基础概念巩固的投入，每日保持1-2小时的稳定学习节奏，逐步建立学习习惯",
         "启动阶段2铺垫：在阶段1达标后，初步接触基础概念辨析类练习题，熟悉练习题题型与考查逻辑，为正式进入阶段2学习做好准备"
-      ]
-    }
-  },
-  {
-    "created_at": "2026-04-14T14:11:34Z",
-    "run_name": "run_20260414_214927",
-    "form_type": "progress",
-    "checkin": {
-      "topic": "傅里叶变换",
-      "questionnaire_type": "progress",
-      "responses": [
-        {
-          "question_id": "stage_1_quiz_1",
-          "type": "single_choice",
-          "answer": "仅了解名词"
-        },
-        {
-          "question_id": "stage_1_quiz_2",
-          "type": "text",
-          "answer": "1"
-        },
-        {
-          "question_id": "stage_1_completion",
-          "type": "single_choice",
-          "answer": "0-25%"
-        },
-        {
-          "question_id": "stage_1_difficulty",
-          "type": "scale",
-          "answer": "4"
-        },
-        {
-          "question_id": "stage_1_blocker",
-          "type": "text",
-          "answer": "1"
-        }
-      ]
-    },
-    "evaluation": {
-      "summary": "学习进度评估：",
-      "overall_score": 0,
-      "stage_progress": [
-        {
-          "stage_no": 1,
-          "goal": "掌握傅里叶变换的基本原理和应用",
-          "completion_rate": 0,
-          "quality_score": 0,
-          "issues": [],
-          "next_actions": []
-        }
-      ],
-      "study_efficiency": {
-        "planned_hours": 2,
-        "actual_hours": 0,
-        "deviation_note": ""
-      },
-      "risk_alerts": [],
-      "next_week_targets": [
-        {
-          "stage_no": 1,
-          "goal": "阅读课程讲解文档，理解傅里叶变换的基本概念和原理。",
-          "next_action": "阅读课程讲解文档"
-        },
-        {
-          "stage_no": 1,
-          "goal": "观看视频学习资料，加深对傅里叶变换的理解。",
-          "next_action": "观看视频学习资料"
-        }
       ]
     }
   }

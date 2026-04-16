@@ -29,12 +29,13 @@ def _stringify(value: Any) -> str:
 
 
 class MultiAgentLearningSystem:
+    MERMAID_RESOURCE_TYPE = "知识点思维导图(Mermaid)"
     REQUIRED_RESOURCE_TYPES = [
         "课程讲解文档",
-        "知识点思维导图(Mermaid)",
+        MERMAID_RESOURCE_TYPE,
         "分层练习题(含答案与解析)",
         "拓展阅读材料",
-        "代码实操案例",
+        "实操案例",
         "视频学习资料",
     ]
 
@@ -58,16 +59,162 @@ class MultiAgentLearningSystem:
             merged.append(f"[{file.name}]\n{content[:5000]}")
         return f"课程: {course}\n\n" + "\n\n".join(merged)
 
-    def build_or_update_profile(self, dialogue: str, old_profile: Dict | None = None) -> Dict:
+    @staticmethod
+    def _is_lite_model(model: str) -> bool:
+        normalized = str(model or "").strip().lower()
+        return "lite" in normalized
+
+    @staticmethod
+    def _safe_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _safe_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _normalize_str_list(values: Any) -> List[str]:
+        if not isinstance(values, list):
+            return []
+        result: List[str] = []
+        for item in values:
+            text = _stringify(item).strip()
+            if not text:
+                continue
+            result.append(text)
+        return result
+
+    def _normalize_profile_payload(
+        self,
+        payload: Dict[str, Any],
+        dialogue: str,
+        course: str = "",
+        topic: str = "",
+        old_profile: Dict | None = None,
+    ) -> Dict[str, Any]:
+        old_profile = old_profile or {}
+        old_profile_body = old_profile.get("profile", {}) if isinstance(old_profile, dict) else {}
+        if not isinstance(old_profile_body, dict):
+            old_profile_body = {}
+        incoming_profile = payload.get("profile", {}) if isinstance(payload, dict) else {}
+        if not isinstance(incoming_profile, dict):
+            incoming_profile = {}
+
+        learning_goals = self._normalize_str_list(incoming_profile.get("learning_goals", []))
+        weak_points = self._normalize_str_list(incoming_profile.get("weak_points", []))
+        preferred_modalities = self._normalize_str_list(incoming_profile.get("preferred_modalities", []))
+        next_questions = self._normalize_str_list(payload.get("next_questions", []))
+
+        profile_course = _stringify(incoming_profile.get("course", "")).strip() or _stringify(old_profile_body.get("course", "")).strip() or course
+        profile_major = _stringify(incoming_profile.get("major", "")).strip() or _stringify(old_profile_body.get("major", "")).strip() or "待补充"
+        topic_hint = topic or profile_course or "当前学习主题"
+        dialogue_hint = _stringify(dialogue).strip()[:80] or "学生对话信息"
+
+        if len(learning_goals) < 3:
+            defaults = [
+                f"围绕「{topic_hint}」建立完整知识框架，并能清晰讲解核心概念。",
+                f"在两周内完成至少 6 道与「{topic_hint}」相关的分层练习并复盘错因。",
+                f"形成一份可复用的学习笔记，包含关键公式、易错点与解题流程。",
+            ]
+            for item in defaults:
+                if len(learning_goals) >= 3:
+                    break
+                if item not in learning_goals:
+                    learning_goals.append(item)
+
+        if len(weak_points) < 3:
+            defaults = [
+                "核心概念之间的联系不够清晰，知识点容易割裂。",
+                "做题时步骤不稳定，常出现审题不全或公式调用不准确。",
+                "复盘深度不足，错题迁移到新题型的能力偏弱。",
+            ]
+            for item in defaults:
+                if len(weak_points) >= 3:
+                    break
+                if item not in weak_points:
+                    weak_points.append(item)
+
+        if len(preferred_modalities) < 3:
+            defaults = ["图解与结构化大纲", "代码/案例驱动讲解", "分层练习+即时反馈"]
+            for item in defaults:
+                if len(preferred_modalities) >= 3:
+                    break
+                if item not in preferred_modalities:
+                    preferred_modalities.append(item)
+
+        if len(next_questions) < 3:
+            defaults = [
+                f"你目前学习「{topic_hint}」时最卡住的 1-2 个知识点是什么？",
+                "你每周可稳定投入的学习时段（具体到工作日/周末）如何分配？",
+                f"你更希望先补「基础理解」还是先攻克「题目应用」？结合“{dialogue_hint}”再确认一次。",
+            ]
+            for item in defaults:
+                if len(next_questions) >= 3:
+                    break
+                if item not in next_questions:
+                    next_questions.append(item)
+
+        weekly_available_hours = self._safe_int(
+            incoming_profile.get("weekly_available_hours", old_profile_body.get("weekly_available_hours", 6)),
+            6,
+        )
+        weekly_available_hours = min(80, max(1, weekly_available_hours))
+        confidence = self._safe_float(payload.get("confidence", 0.72), 0.72)
+        confidence = min(0.99, max(0.1, confidence))
+
+        return {
+            "profile_version": _stringify(payload.get("profile_version", "v1")) or "v1",
+            "profile": {
+                "major": profile_major,
+                "course": profile_course or "待补充",
+                "learning_goals": learning_goals[:6],
+                "knowledge_level": _stringify(incoming_profile.get("knowledge_level", "")).strip()
+                or _stringify(old_profile_body.get("knowledge_level", "")).strip()
+                or "基础待巩固",
+                "cognitive_style": _stringify(incoming_profile.get("cognitive_style", "")).strip()
+                or _stringify(old_profile_body.get("cognitive_style", "")).strip()
+                or "偏好结构化讲解与逐步推导",
+                "weak_points": weak_points[:6],
+                "learning_pace": _stringify(incoming_profile.get("learning_pace", "")).strip()
+                or _stringify(old_profile_body.get("learning_pace", "")).strip()
+                or "稳步推进（每周2-4次学习）",
+                "preferred_modalities": preferred_modalities[:6],
+                "weekly_available_hours": weekly_available_hours,
+            },
+            "confidence": round(confidence, 2),
+            "next_questions": next_questions[:6],
+        }
+
+    def build_or_update_profile(
+        self,
+        dialogue: str,
+        old_profile: Dict | None = None,
+        course: str = "",
+        topic: str = "",
+    ) -> Dict:
         profile_snapshot = old_profile or {}
+        lite_mode = self._is_lite_model(getattr(self.spark, "model", ""))
         system = (
             "你是学习画像智能体。根据学生对话构建或更新动态画像。"
             "必须返回严格JSON，不要输出任何额外说明。"
             "维度不少于6个，需包含: 专业/课程、学习目标、知识基础、认知风格、薄弱点、学习节奏、偏好资源类型、可投入时间。"
         )
+        if lite_mode:
+            system += (
+                "输出必须信息充分且具体：learning_goals、weak_points、preferred_modalities、next_questions 每项至少3条；"
+                "每条都要可执行、避免空泛表述。"
+            )
         user = {
             "old_profile": profile_snapshot,
             "dialogue": dialogue,
+            "course": course,
+            "topic": topic,
             "output_schema": {
                 "profile_version": "v1",
                 "profile": {
@@ -89,19 +236,35 @@ class MultiAgentLearningSystem:
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
             temperature=0.2,
         )
-        return extract_json_block(raw)
+        parsed = extract_json_block(raw)
+        return self._normalize_profile_payload(
+            payload=parsed,
+            dialogue=dialogue,
+            course=course,
+            topic=topic,
+            old_profile=profile_snapshot,
+        )
 
     def _generate_single_resource(self, resource_type: str, topic: str, profile: Dict, kb_text: str) -> str:
         system = (
             "你是资源生成智能体。生成内容必须可直接用于学习。"
             "禁止编造不确定事实，不确定信息用【需核验】标记。"
             "内容必须个性化，显式贴合学生画像。"
+            "若包含数学公式，必须使用LaTeX格式：行内公式用 $...$，独立公式用 $$...$$。"
+            "不要使用纯文本伪公式。"
         )
         extra_requirement = ""
         if resource_type == "视频学习资料":
             extra_requirement = (
                 "请输出Markdown格式，至少给出5条视频学习资料，优先可公开访问。"
                 "每条需包含：标题、平台、链接、适合人群、建议观看顺序与时长。"
+            )
+        if resource_type == self.MERMAID_RESOURCE_TYPE:
+            extra_requirement = (
+                "请只输出 Mermaid 思维导图代码，必须可渲染。"
+                "推荐使用 mindmap 或 graph TD。"
+                "要求覆盖：核心概念、前置知识、常见误区、练习建议、学习顺序，并显式贴合学生画像。"
+                "不要输出解释文字、不要输出 JSON。"
             )
         user_prompt = (
             f"资源类型: {resource_type}\n"
@@ -115,6 +278,128 @@ class MultiAgentLearningSystem:
             [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
             temperature=0.5,
         )
+
+    @staticmethod
+    def _normalize_math_markdown(content: str) -> str:
+        text = _stringify(content)
+        if not text.strip():
+            return text
+        # 统一将常见数学围栏和括号表达转换为 LaTeX 友好格式
+        text = re.sub(r"```(?:latex|math|katex|tex)\s*([\s\S]*?)```", lambda m: f"$$\n{m.group(1).strip()}\n$$", text, flags=re.IGNORECASE)
+        text = re.sub(r"\\\[\s*([\s\S]*?)\s*\\\]", lambda m: f"$$\n{m.group(1).strip()}\n$$", text)
+        text = re.sub(r"\\\(\s*([\s\S]*?)\s*\\\)", lambda m: f"${m.group(1).strip()}$", text)
+        return text
+
+    @staticmethod
+    def _extract_markdown_like_from_json(text: str) -> str:
+        body = _stringify(text).strip()
+        if not body:
+            return ""
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return ""
+
+        if isinstance(payload, dict):
+            for key in ("markdown", "content", "text", "answer", "output"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        if isinstance(payload, list):
+            parts: List[str] = []
+            for item in payload:
+                if isinstance(item, str) and item.strip():
+                    parts.append(item.strip())
+                elif isinstance(item, dict):
+                    for key in ("markdown", "content", "text", "answer", "output"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value.strip():
+                            parts.append(value.strip())
+                            break
+            if parts:
+                return "\n\n".join(parts)
+        return ""
+
+    @staticmethod
+    def _strip_leading_json_noise(text: str) -> str:
+        body = _stringify(text).strip()
+        if not body:
+            return body
+
+        body = re.sub(r"^```(?:json)\s*[\s\S]*?```\s*", "", body, flags=re.IGNORECASE).strip()
+        if not body:
+            return body
+
+        if body[0] not in "{[":
+            return body
+
+        depth = 0
+        in_string = False
+        escape = False
+        end_idx = -1
+        for idx, ch in enumerate(body):
+            if in_string:
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == "\"":
+                    in_string = False
+                continue
+            if ch == "\"":
+                in_string = True
+                continue
+            if ch in "{[":
+                depth += 1
+            elif ch in "}]":
+                depth -= 1
+                if depth == 0:
+                    end_idx = idx
+                    break
+        if end_idx < 0:
+            return body
+        tail = body[end_idx + 1 :].strip()
+        if tail:
+            return tail
+        extracted = MultiAgentLearningSystem._extract_markdown_like_from_json(body[: end_idx + 1])
+        return extracted or body
+
+    @staticmethod
+    def _normalize_mermaid_markdown(content: str) -> str:
+        text = _stringify(content).strip()
+        if not text:
+            return "```mermaid\nmindmap\n  root((学习主题))\n    待补充\n```"
+
+        fenced = re.match(r"^```(?:mermaid)?\s*([\s\S]*?)\s*```$", text, flags=re.IGNORECASE)
+        if fenced:
+            body = fenced.group(1).strip()
+            return f"```mermaid\n{body}\n```"
+
+        lines = text.splitlines()
+        mermaid_starts = (
+            "mindmap",
+            "flowchart",
+            "graph",
+            "sequencediagram",
+            "classdiagram",
+            "statediagram",
+            "erdiagram",
+            "gantt",
+            "journey",
+            "pie",
+            "gitgraph",
+            "timeline",
+            "quadrantchart",
+            "requirementdiagram",
+        )
+        for idx, line in enumerate(lines):
+            lower = line.strip().lower()
+            if any(lower.startswith(prefix) for prefix in mermaid_starts):
+                body = "\n".join(lines[idx:]).strip()
+                return f"```mermaid\n{body}\n```"
+        return f"```mermaid\nmindmap\n  root((学习主题))\n    待补充\n```"
 
     def build_report_markdown(self, report: Dict) -> Dict[str, str]:
         profile_md = self._profile_to_markdown(report.get("profile", {}))
@@ -261,7 +546,12 @@ class MultiAgentLearningSystem:
         kb_text = self._read_knowledge_base(course)
         results: Dict[str, str] = {}
         for item in self.REQUIRED_RESOURCE_TYPES:
-            results[item] = self._generate_single_resource(item, topic, profile, kb_text)
+            raw = self._generate_single_resource(item, topic, profile, kb_text)
+            normalized = self._strip_leading_json_noise(raw)
+            normalized = self._normalize_math_markdown(normalized)
+            if item == self.MERMAID_RESOURCE_TYPE:
+                normalized = self._normalize_mermaid_markdown(normalized)
+            results[item] = normalized
         return results
 
     def _normalize_question_type(self, raw_type: str) -> str:
@@ -596,11 +886,17 @@ class MultiAgentLearningSystem:
         return self.spark.chat([{"role": "system", "content": system}, {"role": "user", "content": user}], temperature=0.4)
 
     def evaluate_learning(self, progress_payload: Dict, profile: Dict, path: Dict) -> Dict:
+        lite_mode = self._is_lite_model(getattr(self.spark, "model", ""))
         system = (
             "你是学习效果评估智能体。请基于学习路径与学习进度进行详细评估。"
             "学习进度输入是问卷作答结果，请充分利用作答内容。"
             "输出严格JSON，必须包含总体结论、综合评分、按阶段评估、效率分析、风险提醒、下一步目标。"
         )
+        if lite_mode:
+            system += (
+                "输出必须具体可执行：summary 不少于2句，stage_progress 至少1个阶段，"
+                "risk_alerts 至少2条，next_week_targets 至少3条。"
+            )
         user = {
             "progress": progress_payload,
             "profile": profile,
@@ -627,10 +923,122 @@ class MultiAgentLearningSystem:
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
             temperature=0.2,
         )
-        return extract_json_block(raw)
+        parsed = extract_json_block(raw)
+        return self._normalize_evaluation_payload(parsed, progress_payload=progress_payload, path=path)
+
+    def _normalize_evaluation_payload(self, payload: Dict[str, Any], progress_payload: Dict[str, Any], path: Dict[str, Any]) -> Dict[str, Any]:
+        stages = path.get("stages", []) if isinstance(path, dict) else []
+        if not isinstance(stages, list):
+            stages = []
+
+        raw_stage_progress = payload.get("stage_progress", []) if isinstance(payload, dict) else []
+        if not isinstance(raw_stage_progress, list):
+            raw_stage_progress = []
+
+        stage_progress: List[Dict[str, Any]] = []
+        for idx, item in enumerate(raw_stage_progress, start=1):
+            if not isinstance(item, dict):
+                continue
+            stage_no = self._safe_int(item.get("stage_no", idx), idx)
+            goal = _stringify(item.get("goal", "")).strip()
+            if not goal and 0 < stage_no <= len(stages) and isinstance(stages[stage_no - 1], dict):
+                goal = _stringify(stages[stage_no - 1].get("goal", "")).strip()
+            completion_rate = min(100, max(0, self._safe_int(item.get("completion_rate", 0), 0)))
+            quality_score = min(100, max(0, self._safe_int(item.get("quality_score", completion_rate), completion_rate)))
+            issues = self._normalize_str_list(item.get("issues", []))
+            next_actions = self._normalize_str_list(item.get("next_actions", []))
+            if not issues:
+                issues = ["当前阶段反馈信息不足，建议补充具体卡点。"]
+            if not next_actions:
+                next_actions = ["针对当前阶段核心问题补做 2-3 道对应练习并复盘。"]
+            stage_progress.append(
+                {
+                    "stage_no": stage_no,
+                    "goal": goal or f"阶段{stage_no}学习目标",
+                    "completion_rate": completion_rate,
+                    "quality_score": quality_score,
+                    "issues": issues[:4],
+                    "next_actions": next_actions[:4],
+                }
+            )
+
+        if not stage_progress:
+            fallback_stage_no = 1
+            fallback_goal = "当前阶段学习目标"
+            if stages and isinstance(stages[0], dict):
+                fallback_goal = _stringify(stages[0].get("goal", fallback_goal)).strip() or fallback_goal
+            stage_progress = [
+                {
+                    "stage_no": fallback_stage_no,
+                    "goal": fallback_goal,
+                    "completion_rate": 50,
+                    "quality_score": 55,
+                    "issues": ["lite 模型返回信息较少，建议结合问卷补充学习细节。"],
+                    "next_actions": ["按学习路径补充阶段任务完成情况并进行一次错题复盘。"],
+                }
+            ]
+
+        overall_score = self._safe_int(payload.get("overall_score", 0), 0)
+        if overall_score <= 0:
+            overall_score = int(
+                sum(item.get("quality_score", 0) for item in stage_progress) / max(1, len(stage_progress))
+            )
+        overall_score = min(100, max(0, overall_score))
+
+        summary = _stringify(payload.get("summary", "")).strip()
+        if not summary:
+            summary = (
+                f"当前学习综合评分约为 {overall_score}/100。"
+                "建议优先修复关键薄弱点，并通过阶段性练习提升稳定输出能力。"
+            )
+
+        efficiency = payload.get("study_efficiency", {})
+        if not isinstance(efficiency, dict):
+            efficiency = {}
+        planned_hours = max(1, self._safe_int(efficiency.get("planned_hours", 6), 6))
+        actual_hours = max(0, self._safe_int(efficiency.get("actual_hours", planned_hours), planned_hours))
+        deviation_note = _stringify(efficiency.get("deviation_note", "")).strip() or "学习时长基本符合计划，可继续保持节奏。"
+
+        risk_alerts = self._normalize_str_list(payload.get("risk_alerts", []))
+        if len(risk_alerts) < 2:
+            defaults = [
+                "若仅停留在阅读，缺少主动练习，知识迁移能力会提升缓慢。",
+                "若不做阶段复盘，错误模式可能在后续任务中重复出现。",
+            ]
+            for item in defaults:
+                if len(risk_alerts) >= 2:
+                    break
+                if item not in risk_alerts:
+                    risk_alerts.append(item)
+
+        next_week_targets = self._normalize_str_list(payload.get("next_week_targets", []))
+        if len(next_week_targets) < 3:
+            defaults = [
+                "完成当前阶段核心知识点清单，并输出一页结构化总结。",
+                "完成至少 6 道分层练习，标注错因并整理改进动作。",
+                "进行 1 次阶段自测，验证对关键概念与方法的掌握程度。",
+            ]
+            for item in defaults:
+                if len(next_week_targets) >= 3:
+                    break
+                if item not in next_week_targets:
+                    next_week_targets.append(item)
+
+        return {
+            "summary": summary,
+            "overall_score": overall_score,
+            "stage_progress": stage_progress[:5],
+            "study_efficiency": {
+                "planned_hours": planned_hours,
+                "actual_hours": actual_hours,
+                "deviation_note": deviation_note,
+            },
+            "risk_alerts": risk_alerts[:5],
+            "next_week_targets": next_week_targets[:6],
+        }
 
     def run(self, dialogue: str, course: str, topic: str, progress: str = "") -> Dict:
-        profile_data = self.build_or_update_profile(dialogue)
+        profile_data = self.build_or_update_profile(dialogue=dialogue, course=course, topic=topic)
         resources = self.generate_resources(topic=topic, profile=profile_data, course=course)
         path = self.plan_learning_path(topic=topic, profile=profile_data, resources=resources)
         stages = path.get("stages", []) or []
@@ -676,7 +1084,8 @@ class MultiAgentLearningSystem:
         resources_dir.mkdir(parents=True, exist_ok=True)
         for key, value in report["resources"].items():
             safe_name = re.sub(r"[\\/:*?\"<>|]", "_", key)
-            (resources_dir / f"{safe_name}.md").write_text(value, encoding="utf-8")
+            text = _stringify(value)
+            (resources_dir / f"{safe_name}.md").write_text(text, encoding="utf-8")
 
         markdown_payload = self.build_report_markdown(report)
         self.persist_markdown_files(run_dir, markdown_payload)
@@ -699,7 +1108,6 @@ class MultiAgentLearningSystem:
         }
         for name, content in files.items():
             (markdown_dir / name).write_text(content, encoding="utf-8")
-            (run_dir / name).write_text(content, encoding="utf-8")
 
     def persist_questionnaire_markdown_files(self, run_dir: Path, history: List[Dict[str, Any]]):
         markdown_dir = run_dir / "markdown"
@@ -717,4 +1125,3 @@ class MultiAgentLearningSystem:
             prefix = "学习进度调查问卷" if form_type == "progress" else "学习测试问卷"
             file_name = f"{prefix}_阶段{stage_no}_第{idx}版.md"
             (markdown_dir / file_name).write_text(md, encoding="utf-8")
-            (run_dir / file_name).write_text(md, encoding="utf-8")

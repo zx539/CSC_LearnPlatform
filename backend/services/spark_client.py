@@ -67,6 +67,48 @@ class SparkClient:
             auth = f"Bearer {auth}"
         return url, auth
 
+    @staticmethod
+    def _extract_message_content(message: Dict) -> str:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text", "")).strip()
+                if text:
+                    parts.append(text)
+            return "\n".join(parts).strip()
+        return ""
+
+    def _extract_content(self, data: Dict) -> str:
+        choices = data.get("choices", [])
+        if isinstance(choices, list) and choices:
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            message = choice.get("message", {})
+            if isinstance(message, dict):
+                text = self._extract_message_content(message)
+                if text:
+                    return text
+            # 兼容部分 lite 返回: choices[0].text
+            text = str(choice.get("text", "")).strip()
+            if text:
+                return text
+        # 兼容部分结构: output/text
+        output = data.get("output", {})
+        if isinstance(output, dict):
+            output_text = str(output.get("text", "")).strip()
+            if output_text:
+                return output_text
+        return ""
+
     def chat(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
         headers = {"Authorization": self.authorization, "content-type": "application/json"}
         body = {
@@ -103,12 +145,7 @@ class SparkClient:
                 raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
 
             data = resp.json()
-            choices = data.get("choices", [])
-            if not choices:
-                raise RuntimeError(f"模型返回异常: {json.dumps(data, ensure_ascii=False)}")
-
-            message = choices[0].get("message", {})
-            content = message.get("content", "")
+            content = self._extract_content(data)
             if not content:
                 raise RuntimeError(f"模型返回内容为空: {json.dumps(data, ensure_ascii=False)}")
             return content

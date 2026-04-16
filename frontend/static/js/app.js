@@ -17,6 +17,16 @@ const state = {
   tutorVisible: false,
   tutorMemory: [],
 };
+let mermaidIdSeed = 0;
+const RESOURCE_DISPLAY_ORDER = [
+  "课程讲解文档",
+  "知识点思维导图(Mermaid)",
+  "知识点结构化导图(Markdown大纲)",
+  "分层练习题(含答案与解析)",
+  "实操案例",
+  "拓展阅读材料",
+  "视频学习资料",
+];
 
 function byId(id) {
   return document.getElementById(id);
@@ -91,15 +101,155 @@ function configureMarkdownRenderer() {
   if (!window.marked) return;
   marked.setOptions({
     gfm: true,
-    breaks: true,
+    // 避免在公式块中插入 <br>，导致 KaTeX 间歇性无法识别
+    breaks: false,
   });
   if (window.mermaid) {
     mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: "default" });
   }
 }
 
+function normalizeMarkdownForRender(rawText) {
+  const raw = String(rawText || "").trim();
+  if (!raw) return "";
+  const mermaidStarts = [
+    "mindmap",
+    "flowchart",
+    "graph",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram",
+    "erDiagram",
+    "gantt",
+    "journey",
+    "pie",
+    "gitGraph",
+    "timeline",
+    "quadrantChart",
+    "requirementDiagram",
+  ];
+  const looksLikeMermaid = (text) => {
+    const firstLine = String(text || "").trim().split(/\r?\n/, 1)[0].trim();
+    return mermaidStarts.some((prefix) => firstLine.startsWith(prefix));
+  };
+  const looksLikeMarkdown = (text) => /(^|\n)\s*(#{1,6}\s+\S|[-*+]\s+\S|\d+\.\s+\S|>\s+\S|```|!\[.*\]\(.*\)|\|.+\|)/.test(String(text || ""));
+  const extractLeadingJson = (text) => {
+    const s = String(text || "").trimStart();
+    if (!s || (s[0] !== "{" && s[0] !== "[")) return null;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s[i];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (ch === "\\") {
+          escape = true;
+        } else if (ch === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === "\"") {
+        inString = true;
+        continue;
+      }
+      if (ch === "{" || ch === "[") depth += 1;
+      if (ch === "}" || ch === "]") depth -= 1;
+      if (depth === 0) {
+        return s.slice(0, i + 1);
+      }
+    }
+    return null;
+  };
+
+  let normalized = raw;
+  const looksLikeMathBlock = (text) => {
+    const body = String(text || "").trim();
+    if (!body) return false;
+    const mathHints = /\\(?:frac|sum|int|sqrt|alpha|beta|theta|pi|sin|cos|tan|log|ln)|[_^]|=|\\cdot|\\times|\{|\}/;
+    const proseHints = /[。！？；]|[a-zA-Z]{3,}\s+[a-zA-Z]{3,}/;
+    return mathHints.test(body) && !proseHints.test(body);
+  };
+  // 将数学围栏统一转为 $$...$$；未标注语言但内容明显为公式时也自动转换
+  normalized = normalized.replace(/```([^\n`]*)\s*\n?([\s\S]*?)```/g, (_, langRaw, bodyRaw) => {
+    const lang = String(langRaw || "").trim().toLowerCase();
+    const body = String(bodyRaw || "").trim();
+    if (!body) return "";
+    if (["latex", "math", "katex", "tex"].includes(lang) || (!lang && looksLikeMathBlock(body))) {
+      return `$$\n${body}\n$$`;
+    }
+    return `\`\`\`${langRaw || ""}\n${body}\n\`\`\``;
+  });
+
+  // Lite 有时会在正文前附带 JSON，渲染时移除前置 JSON 噪音
+  normalized = normalized.replace(/^```(?:json)\s*[\s\S]*?```\s*/i, "").trim();
+  const leadingJson = extractLeadingJson(normalized);
+  if (leadingJson) {
+    const rest = normalized.slice(normalized.indexOf(leadingJson) + leadingJson.length).trim();
+    if (rest && looksLikeMarkdown(rest)) {
+      normalized = rest;
+    }
+  }
+
+  // Lite 有时把正文包在 markdown 围栏中，直接解包避免整段被当代码高亮
+  const mdFenced = normalized.match(/```(?:markdown|md)\s*([\s\S]*?)```/i);
+  if (mdFenced && mdFenced[1]) {
+    const body = mdFenced[1].trim();
+    if (body && body.length >= Math.max(40, normalized.length * 0.35)) {
+      normalized = body;
+    }
+  }
+
+  const fenced = normalized.match(/^```([^\n`]*)\s*\n?([\s\S]*?)\n?```$/);
+  if (fenced) {
+    const lang = (fenced[1] || "").trim().toLowerCase();
+    const body = (fenced[2] || "").trim();
+    if (lang === "mermaid" || looksLikeMermaid(body)) {
+      normalized = `\`\`\`mermaid\n${body}\n\`\`\``;
+    } else if (!lang || ["markdown", "md", "text", "txt", "plain", "plaintext"].includes(lang)) {
+      normalized = body;
+    }
+  } else if (looksLikeMermaid(normalized)) {
+    normalized = `\`\`\`mermaid\n${normalized}\n\`\`\``;
+  }
+  return normalized;
+}
+
+function getOrderedResourceEntries(resources) {
+  const entries = Object.entries(resources || {});
+  const order = new Map(RESOURCE_DISPLAY_ORDER.map((name, idx) => [name, idx]));
+  return entries.sort((a, b) => {
+    const ai = order.has(a[0]) ? order.get(a[0]) : Number.MAX_SAFE_INTEGER;
+    const bi = order.has(b[0]) ? order.get(b[0]) : Number.MAX_SAFE_INTEGER;
+    if (ai !== bi) return ai - bi;
+    return String(a[0]).localeCompare(String(b[0]), "zh-CN");
+  });
+}
+
 function enhanceMarkdown(container) {
   if (!container) return;
+  const mermaidStarts = [
+    "mindmap",
+    "flowchart",
+    "graph",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram",
+    "erDiagram",
+    "gantt",
+    "journey",
+    "pie",
+    "gitGraph",
+    "timeline",
+    "quadrantChart",
+    "requirementDiagram",
+  ];
+  const looksLikeMermaid = (text) => {
+    const firstLine = String(text || "").trim().split(/\r?\n/, 1)[0].trim();
+    return mermaidStarts.some((prefix) => firstLine.startsWith(prefix));
+  };
   container.querySelectorAll("table").forEach((table) => {
     const parent = table.parentElement;
     if (parent && parent.classList.contains("table-wrap")) return;
@@ -119,32 +269,93 @@ function enhanceMarkdown(container) {
         { left: "\\(", right: "\\)", display: false },
         { left: "\\[", right: "\\]", display: true },
       ],
+      ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"],
       throwOnError: false,
     });
   }
   if (window.mermaid) {
-    container.querySelectorAll("pre code.language-mermaid").forEach((node, idx) => {
+    container.querySelectorAll("pre code").forEach((node) => {
       const pre = node.closest("pre");
       if (!pre || pre.dataset.mermaidRendered === "1") return;
+      const classText = node.className || "";
+      const content = node.textContent || "";
+      const isMermaidClass = /(?:^|\s)(language-mermaid|lang-mermaid)(?:\s|$)/.test(classText);
+      if (!isMermaidClass && !looksLikeMermaid(content)) return;
       const wrapper = document.createElement("div");
       wrapper.className = "mermaid";
-      wrapper.textContent = node.textContent || "";
-      wrapper.id = `mermaid-${Date.now()}-${idx}`;
+      wrapper.textContent = content;
+      wrapper.dataset.mermaidSource = content;
+      wrapper.id = `mermaid-${Date.now()}-${++mermaidIdSeed}`;
+      pre.dataset.mermaidRendered = "1";
       pre.replaceWith(wrapper);
     });
-    container.querySelectorAll(".mermaid").forEach((node) => {
-      if (node.dataset.rendered === "1") return;
-      node.dataset.rendered = "1";
-    });
-    mermaid.run({ nodes: container.querySelectorAll(".mermaid") });
+    const isVisible = !!(container.offsetParent || container.classList.contains("active"));
+    if (!isVisible) return;
+    const nodes = Array.from(container.querySelectorAll(".mermaid")).filter((node) => node.getAttribute("data-processed") !== "true");
+    if (nodes.length) {
+      Promise.resolve(mermaid.run({ nodes })).catch(() => {
+        nodes.forEach((node) => {
+          if (node.getAttribute("data-processed") === "true") return;
+          node.classList.add("mermaid-failed");
+        });
+      });
+    }
   }
 }
 
+function applyExerciseAnswerGate(panel) {
+  if (!panel || panel.dataset.exerciseGateApplied === "1") return;
+  const markdownRoot = panel.querySelector(".markdown-body > div");
+  if (!markdownRoot) return;
+  const headings = Array.from(markdownRoot.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+  const startHeading = headings.find((h) => /(答案|解析)/.test((h.textContent || "").trim()));
+  if (!startHeading) return;
+
+  const allNodes = Array.from(markdownRoot.childNodes);
+  const startIdx = allNodes.findIndex((node) => node === startHeading);
+  if (startIdx < 0) return;
+  const answerNodes = allNodes.slice(startIdx);
+  if (!answerNodes.length) return;
+
+  const answerWrap = document.createElement("section");
+  answerWrap.className = "exercise-answer-content hidden-by-gate";
+  answerNodes.forEach((node) => answerWrap.appendChild(node));
+
+  const gate = document.createElement("section");
+  gate.className = "exercise-answer-gate";
+  gate.innerHTML = `
+    <label class="exercise-answer-label">
+      请先填写你的答案（可简写）：
+      <textarea class="exercise-answer-input" rows="4" placeholder="请输入你的作答，再点击“提交并查看答案解析”"></textarea>
+    </label>
+    <div class="exercise-answer-actions">
+      <button type="button" class="btn-secondary exercise-answer-submit">提交并查看答案解析</button>
+      <span class="exercise-answer-hint muted-text">提交后会显示标准答案与解析。</span>
+    </div>
+  `;
+
+  markdownRoot.appendChild(gate);
+  markdownRoot.appendChild(answerWrap);
+  panel.dataset.exerciseGateApplied = "1";
+
+  const input = gate.querySelector(".exercise-answer-input");
+  const btn = gate.querySelector(".exercise-answer-submit");
+  const hint = gate.querySelector(".exercise-answer-hint");
+  if (!input || !btn || !hint) return;
+  btn.addEventListener("click", () => {
+    const value = String(input.value || "").trim();
+    if (!value) {
+      hint.textContent = "请先填写你的答案后再提交。";
+      return;
+    }
+    answerWrap.classList.remove("hidden-by-gate");
+    gate.classList.add("hidden-by-gate");
+  });
+}
+
 function renderMarkdownContent(rawText) {
-  const raw = String(rawText || "").trim();
-  if (!raw) return "";
-  const fenced = raw.match(/^```(?:markdown|md)?\s*([\s\S]*?)\s*```$/i);
-  const normalized = fenced ? fenced[1].trim() : raw;
+  const normalized = normalizeMarkdownForRender(rawText);
+  if (!normalized) return "";
   return window.marked ? marked.parse(normalized) : `<pre>${escapeHtml(normalized)}</pre>`;
 }
 
@@ -207,23 +418,37 @@ function renderResourcesAsTabs(resources) {
   clearDynamicResourceTabs();
   const tabsWrap = byId("resultTabs");
   const panelsWrap = document.querySelector("#resultCard .tab-panels");
-  const entries = Object.entries(resources || {});
+  const entries = getOrderedResourceEntries(resources);
+  const overview = byId("resources_panel");
+  if (overview) {
+    const cards = entries
+      .map(([name]) => `<article class="resource-overview-item"><strong>${escapeHtml(name)}</strong><span class="muted-text">点击上方同名标签查看详情</span></article>`)
+      .join("");
+    overview.innerHTML = cards
+      ? `<div class="resource-overview-grid">${cards}</div>`
+      : "<p class='muted-text'>暂无学习资源。</p>";
+  }
   entries.forEach(([name, content], idx) => {
     const panelId = `resource_${idx}`;
     const tab = document.createElement("button");
     tab.className = "tab resource-tab-dynamic";
     tab.dataset.tab = panelId;
     tab.textContent = name;
-    tabsWrap.appendChild(tab);
+    const pathTab = tabsWrap.querySelector('.tab[data-tab="path"]');
+    if (pathTab) tabsWrap.insertBefore(tab, pathTab);
+    else tabsWrap.appendChild(tab);
 
     const panel = document.createElement("section");
     panel.id = panelId;
     panel.className = "panel resource-panel-dynamic";
-    const contentText = typeof content === "string" ? content : buildFallbackMarkdown(name, content || {});
+    let contentText = typeof content === "string" ? content : buildFallbackMarkdown(name, content || {});
     const html = renderMarkdownContent(contentText || "");
     panel.innerHTML = `<article class="resource-item markdown-body"><div>${html}</div></article>`;
     panelsWrap.appendChild(panel);
     enhanceMarkdown(panel);
+    if (String(name).includes("分层练习题")) {
+      applyExerciseAnswerGate(panel);
+    }
   });
 }
 
@@ -259,6 +484,7 @@ function renderProjectOptions(runs) {
           <div class="title">${escapeHtml(item.course || "未命名课程")} · ${escapeHtml(item.topic || "未命名主题")}</div>
           <div class="meta">创建时间：${escapeHtml(item.created_at || item.run_name || "")}</div>
         </div>
+        <button class="btn-light project-delete-btn" data-delete-run="${item.run_name}" type="button">删除</button>
       </article>`,
     )
     .join("");
@@ -270,6 +496,31 @@ function renderProjectOptions(runs) {
       state.selectedRunName = runName;
       renderProjectOptions(state.runs);
       setProjectStatus(`已选择学习项目：${runName}，点击“进入已选学习项目”继续。`);
+    });
+  });
+  el.querySelectorAll(".project-delete-btn").forEach((node) => {
+    node.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const runName = node.getAttribute("data-delete-run") || "";
+      if (!runName) return;
+      const confirmed = window.confirm(`确认删除学习项目「${runName}」吗？删除后不可恢复。`);
+      if (!confirmed) return;
+      setProjectStatus(`正在删除学习项目：${runName} ...`);
+      try {
+        const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`, { method: "DELETE" });
+        const result = await resp.json();
+        if (!resp.ok) throw new Error(result.error || "删除失败");
+        if (state.selectedRunName === runName) {
+          state.selectedRunName = "";
+          if (state.mode === "existing") {
+            goBackToProjectSelection();
+          }
+        }
+        await loadProjects();
+        setProjectStatus(`学习项目已删除：${runName}`);
+      } catch (err) {
+        setProjectStatus(`删除失败：${err.message}`);
+      }
     });
   });
 }
@@ -457,7 +708,17 @@ function setActiveTab(tabId) {
   const tab = document.querySelector(`.tab[data-tab="${tabId}"]`);
   if (!tab) return;
   tab.classList.add("active");
-  byId(tabId).classList.add("active");
+  const panel = byId(tabId);
+  if (!panel) return;
+  panel.classList.add("active");
+  panel.querySelectorAll(".mermaid[data-processed='true']").forEach((node) => {
+    const source = node.dataset.mermaidSource;
+    if (!source) return;
+    node.textContent = source;
+    node.removeAttribute("data-processed");
+  });
+  // Mermaid 在隐藏容器中有概率不渲染，切换到当前标签时再次增强渲染。
+  enhanceMarkdown(panel);
 }
 
 function clearResultPanels() {
@@ -465,6 +726,7 @@ function clearResultPanels() {
   state.reportMarkdown = {};
   clearDynamicResourceTabs();
   byId("profile").innerHTML = "";
+  byId("resources_panel").innerHTML = "";
   byId("path").innerHTML = "";
   byId("evaluate").innerHTML = "";
   byId("question").value = "";
