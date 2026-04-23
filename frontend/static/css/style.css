@@ -21,6 +21,22 @@ body {
   background: var(--bg);
 }
 
+.site-footer {
+  text-align: center;
+  padding: 10px 16px 18px;
+  color: #6f82ae;
+  font-size: 13px;
+}
+
+.site-footer a {
+  color: #4b67c0;
+  text-decoration: none;
+}
+
+.site-footer a:hover {
+  text-decoration: underline;
+}
+
 .bg {
   position: fixed;
   inset: 0;
