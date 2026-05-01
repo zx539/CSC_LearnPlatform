@@ -40,8 +40,13 @@ class SparkClient:
         return value
 
     def _load_config(self, config_path: str) -> Tuple[str, str]:
-        env_url = os.getenv("SPARK_API_URL")
-        env_auth = os.getenv("SPARK_API_AUTH")
+        model_key = str(self.model or "").strip().lower()
+        if model_key in {"lite", "sparklite", "4.0lite"}:
+            env_url = os.getenv("SPARK_LITE_API_URL") or os.getenv("SPARK_API_URL")
+            env_auth = os.getenv("SPARK_LITE_API_AUTH") or os.getenv("SPARK_API_AUTH")
+        else:
+            env_url = os.getenv("SPARK_ULTRA_API_URL") or os.getenv("SPARK_API_URL")
+            env_auth = os.getenv("SPARK_ULTRA_API_AUTH") or os.getenv("SPARK_API_AUTH")
         if env_url and env_auth:
             auth = env_auth if env_auth.lower().startswith("bearer ") else f"Bearer {env_auth}"
             return env_url.strip(), auth.strip()

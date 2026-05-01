@@ -120,6 +120,13 @@ APIkey：你的密钥
 也支持环境变量覆盖（优先级更高）：
 
 ```bash
+# 双模型双密钥（推荐）
+export SPARK_ULTRA_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completions"
+export SPARK_ULTRA_API_AUTH="Bearer 你的Ultra模型密钥"
+export SPARK_LITE_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completions"
+export SPARK_LITE_API_AUTH="Bearer 你的Lite模型密钥"
+
+# 单密钥兼容写法（可选）
 export SPARK_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completions"
 export SPARK_API_AUTH="Bearer 你的密钥"
 ```
