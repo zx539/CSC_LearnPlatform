@@ -32,6 +32,23 @@ function byId(id) {
   return document.getElementById(id);
 }
 
+function getMainModel() {
+  return byId("model")?.value?.trim() || "4.0Ultra";
+}
+
+function getTutorModel() {
+  const tutorModel = byId("tutorModel")?.value?.trim();
+  return tutorModel || getMainModel();
+}
+
+function syncTutorModel(modelValue) {
+  const tutorModelEl = byId("tutorModel");
+  if (!tutorModelEl) return;
+  const candidate = String(modelValue || "").trim();
+  const hasCandidate = Array.from(tutorModelEl.options).some((opt) => opt.value === candidate);
+  tutorModelEl.value = hasCandidate ? candidate : "4.0Ultra";
+}
+
 function setStatus(text) {
   byId("status").textContent = text;
 }
@@ -61,7 +78,7 @@ function setStep(step) {
   byId("mainLayout").classList.toggle("project-centered", step === "project");
 }
 
-function showLoading(text = "正在请求星火 AI，请稍候...", cancellable = false) {
+function showLoading(text = "正在请求 AI 大模型，请稍候...", cancellable = false) {
   byId("loadingText").textContent = text;
   setVisible("cancelRequestBtn", cancellable);
   setVisible("loadingModal", true);
@@ -209,6 +226,9 @@ function normalizeMarkdownForRender(rawText) {
     if (lang === "mermaid" || looksLikeMermaid(body)) {
       normalized = `\`\`\`mermaid\n${body}\n\`\`\``;
     } else if (!lang || ["markdown", "md", "text", "txt", "plain", "plaintext"].includes(lang)) {
+      normalized = body;
+    } else if (looksLikeMarkdown(body)) {
+      // 部分模型会用未知语言标记包裹整段 Markdown，直接解包避免整页被当代码块。
       normalized = body;
     }
   } else if (looksLikeMermaid(normalized)) {
@@ -902,6 +922,7 @@ async function chooseExistingProject() {
   byId("topic").value = req.topic || "";
   byId("dialogue").value = req.dialogue || "";
   byId("model").value = req.model || "4.0Ultra";
+  syncTutorModel(req.model || "4.0Ultra");
   state.topic = req.topic || "";
   state.selectedRunName = runName;
   state.mode = "existing";
@@ -945,6 +966,7 @@ function chooseNewProject() {
   byId("topic").value = "";
   byId("dialogue").value = "";
   byId("model").value = "4.0Ultra";
+  syncTutorModel("4.0Ultra");
   clearResultPanels();
   setStep("task");
   setProjectStatus("已进入新建学习项目模式，请填写信息后生成学习画像。");
@@ -1011,17 +1033,18 @@ async function generate() {
     topic: byId("topic").value.trim(),
     dialogue: byId("dialogue").value.trim(),
     progress: "",
-    model: byId("model").value.trim() || "4.0Ultra",
+    model: getMainModel(),
   };
   if (!payload.course || !payload.topic || !payload.dialogue) {
     setStatus("请填写必填项：课程、主题、画像对话。");
     return;
   }
+  syncTutorModel(payload.model);
   state.topic = payload.topic;
   setStatus("正在生成学习方案...");
 
   const data = await withLoading(
-    "正在请求星火 AI 生成学习画像与学习方案...",
+    "正在请求 AI 大模型生成学习画像与学习方案...",
     async (signal) => {
       const resp = await fetch("/api/generate", {
         method: "POST",
@@ -1036,7 +1059,7 @@ async function generate() {
     { cancellable: true },
   ).catch((err) => {
     if (err?.name === "AbortError") {
-      setStatus("已取消本次星火请求。");
+      setStatus("已取消本次模型请求。");
       return null;
     }
     setStatus(`错误：${err.message}`);
@@ -1071,7 +1094,7 @@ async function submitProgress() {
   setStatus("正在提交学习进度调查问卷...");
 
   const data = await withLoading(
-    "正在请求星火 AI 评估学习进度...",
+    "正在请求 AI 大模型评估学习进度...",
     async (signal) => {
       const resp = await fetch("/api/progress/checkin", {
         method: "POST",
@@ -1079,7 +1102,7 @@ async function submitProgress() {
         body: JSON.stringify({
           run_name: state.selectedRunName,
           form_type: "progress",
-          model: byId("model").value.trim() || "4.0Ultra",
+          model: getMainModel(),
           checkin: checkin.payload,
         }),
         signal,
@@ -1091,7 +1114,7 @@ async function submitProgress() {
     { cancellable: true },
   ).catch((err) => {
     if (err?.name === "AbortError") {
-      setStatus("已取消本次星火评估请求。");
+      setStatus("已取消本次模型评估请求。");
       return null;
     }
     setStatus(`学习进度提交失败：${err.message}`);
@@ -1123,7 +1146,7 @@ async function submitTest() {
   }
   setStatus("正在提交测试问卷并更新进度/测试问卷...");
   const data = await withLoading(
-    "正在请求星火 AI 生成更新后的进度问卷和测试问卷...",
+    "正在请求 AI 大模型生成更新后的进度问卷和测试问卷...",
     async (signal) => {
       const resp = await fetch("/api/progress/checkin", {
         method: "POST",
@@ -1131,7 +1154,7 @@ async function submitTest() {
         body: JSON.stringify({
           run_name: state.selectedRunName,
           form_type: "test",
-          model: byId("model").value.trim() || "4.0Ultra",
+          model: getMainModel(),
           checkin: checkin.payload,
         }),
         signal,
@@ -1143,7 +1166,7 @@ async function submitTest() {
     { cancellable: true },
   ).catch((err) => {
     if (err?.name === "AbortError") {
-      setStatus("已取消本次星火评估请求。");
+      setStatus("已取消本次模型评估请求。");
       return null;
     }
     setStatus(`测试问卷提交失败：${err.message}`);
@@ -1187,7 +1210,7 @@ async function askTutor() {
   byId("tutorHint").textContent = "正在生成辅导答案...";
 
   const data = await withLoading(
-    "正在请求星火 AI 生成辅导答案...",
+    "正在请求 AI 大模型生成辅导答案...",
     async (signal) => {
       const resp = await fetch("/api/tutor", {
         method: "POST",
@@ -1195,7 +1218,7 @@ async function askTutor() {
         body: JSON.stringify({
           question,
           topic: state.topic,
-          model: byId("model").value.trim() || "4.0Ultra",
+          model: getTutorModel(),
           profile: state.report.profile,
           memory: state.tutorMemory,
         }),
@@ -1208,7 +1231,7 @@ async function askTutor() {
     { cancellable: true },
   ).catch((err) => {
     if (err?.name === "AbortError") {
-      byId("tutorHint").textContent = "已取消本次星火辅导请求。";
+      byId("tutorHint").textContent = "已取消本次模型辅导请求。";
       return null;
     }
     byId("tutorHint").textContent = `错误：${err.message}`;

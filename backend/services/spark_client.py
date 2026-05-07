@@ -14,14 +14,51 @@ class SparkClient:
 
     def __init__(self, config_path: str, model: str = "4.0Ultra", timeout: Tuple[int, int] | None = None):
         self.model = model
-        connect_timeout = int(os.getenv("SPARK_CONNECT_TIMEOUT", "10"))
-        read_timeout = int(os.getenv("SPARK_READ_TIMEOUT", "240"))
+        model_key = str(self.model or "").strip().lower()
+        connect_timeout = self._resolve_int_env(model_key, "CONNECT_TIMEOUT", "10")
+        read_timeout = self._resolve_int_env(model_key, "READ_TIMEOUT", "240")
         self.timeout = timeout or (connect_timeout, read_timeout)
-        self.max_retries = max(0, int(os.getenv("SPARK_MAX_RETRIES", "2")))
-        self.retry_interval = float(os.getenv("SPARK_RETRY_INTERVAL", "1.0"))
-        self.max_parallel = max(1, int(os.getenv("SPARK_MAX_PARALLEL", "5")))
-        self.acquire_timeout = int(os.getenv("SPARK_ACQUIRE_TIMEOUT", "300"))
+        self.max_retries = max(0, self._resolve_int_env(model_key, "MAX_RETRIES", "2"))
+        self.retry_interval = max(0.0, self._resolve_float_env(model_key, "RETRY_INTERVAL", "1.0"))
+        self.max_parallel = max(1, self._resolve_int_env(model_key, "MAX_PARALLEL", "5"))
+        self.acquire_timeout = max(1, self._resolve_int_env(model_key, "ACQUIRE_TIMEOUT", "300"))
         self.url, self.authorization = self._load_config(config_path)
+
+    @staticmethod
+    def _safe_int(value: str, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _safe_float(value: str, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _resolve_int_env(cls, model_key: str, suffix: str, default: str) -> int:
+        shared = os.getenv(f"SPARK_{suffix}")
+        if model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
+            value = os.getenv(f"DOUBAO_{suffix}") or shared or default
+        elif model_key in {"lite", "sparklite", "4.0lite"}:
+            value = os.getenv(f"SPARK_LITE_{suffix}") or shared or default
+        else:
+            value = os.getenv(f"SPARK_ULTRA_{suffix}") or shared or default
+        return cls._safe_int(value, cls._safe_int(default, 0))
+
+    @classmethod
+    def _resolve_float_env(cls, model_key: str, suffix: str, default: str) -> float:
+        shared = os.getenv(f"SPARK_{suffix}")
+        if model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
+            value = os.getenv(f"DOUBAO_{suffix}") or shared or default
+        elif model_key in {"lite", "sparklite", "4.0lite"}:
+            value = os.getenv(f"SPARK_LITE_{suffix}") or shared or default
+        else:
+            value = os.getenv(f"SPARK_ULTRA_{suffix}") or shared or default
+        return cls._safe_float(value, cls._safe_float(default, 0.0))
 
     @classmethod
     def _get_model_semaphore(cls, model: str, max_parallel: int) -> Semaphore:
@@ -44,6 +81,9 @@ class SparkClient:
         if model_key in {"lite", "sparklite", "4.0lite"}:
             env_url = os.getenv("SPARK_LITE_API_URL") or os.getenv("SPARK_API_URL")
             env_auth = os.getenv("SPARK_LITE_API_AUTH") or os.getenv("SPARK_API_AUTH")
+        elif model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
+            env_url = os.getenv("DOUBAO_API_URL")
+            env_auth = os.getenv("DOUBAO_API_AUTH") or os.getenv("DOUBAO_API_KEY")
         else:
             env_url = os.getenv("SPARK_ULTRA_API_URL") or os.getenv("SPARK_API_URL")
             env_auth = os.getenv("SPARK_ULTRA_API_AUTH") or os.getenv("SPARK_API_AUTH")
@@ -71,6 +111,16 @@ class SparkClient:
         if not auth.lower().startswith("bearer "):
             auth = f"Bearer {auth}"
         return url, auth
+
+    def _request_url(self) -> str:
+        model_key = str(self.model or "").strip().lower()
+        base_url = str(self.url or "").strip().rstrip("/")
+        if model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
+            if base_url.endswith("/chat/completions") or base_url.endswith("/responses"):
+                return base_url
+            if base_url.endswith("/api/v3"):
+                return f"{base_url}/chat/completions"
+        return base_url
 
     @staticmethod
     def _extract_message_content(message: Dict) -> str:
@@ -131,21 +181,21 @@ class SparkClient:
         try:
             for attempt in range(self.max_retries + 1):
                 try:
-                    resp = requests.post(self.url, json=body, headers=headers, timeout=self.timeout)
+                    resp = requests.post(self._request_url(), json=body, headers=headers, timeout=self.timeout)
                     break
                 except requests.exceptions.Timeout as exc:
                     if attempt >= self.max_retries:
                         raise RuntimeError(
-                            f"星火请求超时（模型: {self.model}, 超时: {self.timeout}）。"
-                            "请切换为 lite 模型或稍后重试。"
+                            f"模型请求超时（模型: {self.model}, 超时: {self.timeout}）。"
+                            "请切换模型或稍后重试。"
                         ) from exc
                     time.sleep(self.retry_interval)
                 except requests.exceptions.ConnectionError as exc:
                     if attempt >= self.max_retries:
-                        raise RuntimeError(f"无法连接星火服务，请检查网络或接口地址：{self.url}") from exc
+                        raise RuntimeError(f"无法连接模型服务，请检查网络或接口地址：{self.url}") from exc
                     time.sleep(self.retry_interval)
             if resp is None:
-                raise RuntimeError("星火请求未发出，请重试。")
+                raise RuntimeError("模型请求未发出，请重试。")
             if resp.status_code >= 400:
                 raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
 

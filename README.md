@@ -108,7 +108,7 @@ pip3 install --break-system-packages -r requirements.txt
 
 ---
 
-## 4. 配置星火 API
+## 4. 配置模型 API（星火 + 豆包）
 
 默认读取 `materials/星火SoarkUltra-APIkey.txt`，格式示例：
 
@@ -125,10 +125,31 @@ export SPARK_ULTRA_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completion
 export SPARK_ULTRA_API_AUTH="Bearer 你的Ultra模型密钥"
 export SPARK_LITE_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completions"
 export SPARK_LITE_API_AUTH="Bearer 你的Lite模型密钥"
+export DOUBAO_API_URL="https://ark.cn-beijing.volces.com/api/v3"
+export DOUBAO_API_KEY="你的豆包密钥"
 
 # 单密钥兼容写法（可选）
 export SPARK_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completions"
 export SPARK_API_AUTH="Bearer 你的密钥"
+```
+
+性能调优常用变量（可按模型分别配置）：
+
+```bash
+export SPARK_MAX_PARALLEL="5"
+export RESOURCE_MAX_PARALLEL="3"
+export FORM_MAX_PARALLEL="2"
+
+# 通用
+export SPARK_CONNECT_TIMEOUT="10"
+export SPARK_READ_TIMEOUT="240"
+export SPARK_MAX_RETRIES="2"
+
+# 按模型覆盖（示例）
+export SPARK_ULTRA_MAX_PARALLEL="5"
+export SPARK_LITE_MAX_PARALLEL="8"
+export DOUBAO_MAX_PARALLEL="6"
+export DOUBAO_READ_TIMEOUT="180"
 ```
 
 ---

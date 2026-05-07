@@ -52,6 +52,7 @@
               <select id="model">
                 <option value="4.0Ultra">星火 4.0Ultra（质量优先）</option>
                 <option value="lite">星火 Lite（速度优先）</option>
+                <option value="doubao-seed-2-0-pro-260215">豆包 Seed2.0Pro</option>
               </select>
             </label>
             <label>
@@ -122,6 +123,14 @@
         <span id="tutorMemoryStatus" class="muted-text">当前记忆：0 条</span>
         <button id="clearTutorMemoryBtn" class="btn-light tutor-mini-btn" type="button">清除记忆</button>
       </div>
+      <div class="tutor-model-bar">
+        <label for="tutorModel">智能问答模型</label>
+        <select id="tutorModel">
+          <option value="4.0Ultra">星火 4.0Ultra（质量优先）</option>
+          <option value="lite">星火 Lite（速度优先）</option>
+          <option value="doubao-seed-2-0-pro-260215">豆包 Seed2.0Pro</option>
+        </select>
+      </div>
       <section id="tutorHistory" class="tutor-history"></section>
       <div class="tutor-input-wrap">
         <textarea id="question" rows="3" placeholder="输入学习中遇到的问题..."></textarea>
@@ -134,7 +143,7 @@
   <div id="loadingModal" class="loading-modal hidden-by-gate" aria-live="polite" aria-busy="true">
     <div class="loading-modal-content">
       <div class="loading-spinner"></div>
-      <p id="loadingText">正在请求星火 AI，请稍候...</p>
+      <p id="loadingText">正在请求 AI 大模型，请稍候...</p>
       <button id="cancelRequestBtn" class="btn-light hidden-by-gate" type="button">取消请求</button>
     </div>
   </div>

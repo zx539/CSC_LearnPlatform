@@ -723,6 +723,22 @@ textarea:focus {
   gap: 8px;
 }
 
+.tutor-model-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tutor-model-bar label {
+  color: #5a6fa4;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.tutor-model-bar select {
+  flex: 1;
+}
+
 .tutor-widget.minimized .tutor-widget-body {
   display: none;
 }

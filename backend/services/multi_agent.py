@@ -1,5 +1,7 @@
 import json
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
@@ -44,6 +46,8 @@ class MultiAgentLearningSystem:
         self.kb_dir = Path(kb_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.resource_max_parallel = max(1, min(6, self._safe_int(os.getenv("RESOURCE_MAX_PARALLEL", "3"), 3)))
+        self.form_max_parallel = max(1, min(2, self._safe_int(os.getenv("FORM_MAX_PARALLEL", "2"), 2)))
 
     def _read_knowledge_base(self, course: str) -> str:
         if not self.kb_dir.exists():
@@ -288,6 +292,54 @@ class MultiAgentLearningSystem:
         text = re.sub(r"```(?:latex|math|katex|tex)\s*([\s\S]*?)```", lambda m: f"$$\n{m.group(1).strip()}\n$$", text, flags=re.IGNORECASE)
         text = re.sub(r"\\\[\s*([\s\S]*?)\s*\\\]", lambda m: f"$$\n{m.group(1).strip()}\n$$", text)
         text = re.sub(r"\\\(\s*([\s\S]*?)\s*\\\)", lambda m: f"${m.group(1).strip()}$", text)
+        return text
+
+    @staticmethod
+    def _looks_like_markdown(text: str) -> bool:
+        return bool(
+            re.search(r"(^|\n)\s*(#{1,6}\s+\S|[-*+]\s+\S|\d+\.\s+\S|>\s+\S|!\[.*\]\(.*\)|\|.+\|)", _stringify(text))
+        )
+
+    @staticmethod
+    def _unwrap_markdown_fence(content: str) -> str:
+        text = _stringify(content).strip()
+        if not text:
+            return text
+        fenced = re.match(r"^```([^\n`]*)\s*\n?([\s\S]*?)\n?```$", text)
+        if not fenced:
+            return text
+        lang = _stringify(fenced.group(1)).strip().lower()
+        body = _stringify(fenced.group(2)).strip()
+        if not body:
+            return ""
+        keep_langs = {
+            "mermaid",
+            "latex",
+            "math",
+            "katex",
+            "tex",
+            "json",
+            "python",
+            "py",
+            "javascript",
+            "js",
+            "java",
+            "cpp",
+            "c",
+            "bash",
+            "shell",
+            "sh",
+            "sql",
+            "xml",
+            "yaml",
+            "yml",
+        }
+        if lang in keep_langs:
+            return text
+        if lang in {"markdown", "md", "text", "txt", "plain", "plaintext"}:
+            return body
+        if MultiAgentLearningSystem._looks_like_markdown(body):
+            return body
         return text
 
     @staticmethod
@@ -544,15 +596,23 @@ class MultiAgentLearningSystem:
 
     def generate_resources(self, topic: str, profile: Dict, course: str) -> Dict[str, str]:
         kb_text = self._read_knowledge_base(course)
-        results: Dict[str, str] = {}
-        for item in self.REQUIRED_RESOURCE_TYPES:
-            raw = self._generate_single_resource(item, topic, profile, kb_text)
-            normalized = self._strip_leading_json_noise(raw)
-            normalized = self._normalize_math_markdown(normalized)
-            if item == self.MERMAID_RESOURCE_TYPE:
-                normalized = self._normalize_mermaid_markdown(normalized)
-            results[item] = normalized
-        return results
+        normalized_results: Dict[str, str] = {}
+        max_workers = min(len(self.REQUIRED_RESOURCE_TYPES), self.resource_max_parallel)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_resource = {
+                executor.submit(self._generate_single_resource, item, topic, profile, kb_text): item
+                for item in self.REQUIRED_RESOURCE_TYPES
+            }
+            for future in as_completed(future_to_resource):
+                item = future_to_resource[future]
+                raw = future.result()
+                normalized = self._strip_leading_json_noise(raw)
+                normalized = self._unwrap_markdown_fence(normalized)
+                normalized = self._normalize_math_markdown(normalized)
+                if item == self.MERMAID_RESOURCE_TYPE:
+                    normalized = self._normalize_mermaid_markdown(normalized)
+                normalized_results[item] = normalized
+        return {name: normalized_results.get(name, "") for name in self.REQUIRED_RESOURCE_TYPES}
 
     def _normalize_question_type(self, raw_type: str) -> str:
         t = (raw_type or "").strip().lower()
@@ -1044,8 +1104,19 @@ class MultiAgentLearningSystem:
         stages = path.get("stages", []) or []
         total_stages = len(stages) if stages else 1
         current_stage_no = 1
-        progress_form_template = self.build_progress_form(topic=topic, path=path, profile=profile_data, stage_no=current_stage_no)
-        test_form_template = self.build_test_form(topic=topic, path=path, profile=profile_data, stage_no=current_stage_no)
+        if self.form_max_parallel > 1:
+            with ThreadPoolExecutor(max_workers=self.form_max_parallel) as executor:
+                progress_future = executor.submit(
+                    self.build_progress_form, topic=topic, path=path, profile=profile_data, stage_no=current_stage_no
+                )
+                test_future = executor.submit(
+                    self.build_test_form, topic=topic, path=path, profile=profile_data, stage_no=current_stage_no
+                )
+                progress_form_template = progress_future.result()
+                test_form_template = test_future.result()
+        else:
+            progress_form_template = self.build_progress_form(topic=topic, path=path, profile=profile_data, stage_no=current_stage_no)
+            test_form_template = self.build_test_form(topic=topic, path=path, profile=profile_data, stage_no=current_stage_no)
         progress_form_md = self._progress_form_to_markdown(progress_form_template)
         test_form_md = self._progress_form_to_markdown(test_form_template)
         report = {
