@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
+.venv/
+venv/
+env/
 
 # 用户数据改为独立目录，不再纳入仓库
 data/users/
