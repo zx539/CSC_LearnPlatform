@@ -21,16 +21,8 @@
 │       ├── css/style.css              # 明亮活泼风格样式
 │       └── js/app.js                  # 前端交互逻辑
 ├── data/
-│   ├── knowledge_base/
-│   │   └── ai_course_intro.md         # 示例课程知识库
-│   └── users/                          # 用户独立数据目录（登录后自动创建）
-│       └── <username>/
-│           ├── user.json              # 账户信息（加密密码）
-│           ├── history.json           # 历史任务索引
-│           ├── latest_report.json     # 最新 run 引用（仅 run_name / updated_at）
-│           ├── tutor_log.json         # 答疑记录
-│           └── runs/
-│               └── run_xxx.json       # 每次任务完整数据（JSON）
+│   └── knowledge_base/
+│       └── ai_course_intro.md         # 示例课程知识库
 ├── outputs/                           # 每次运行自动落盘结果
 ├── run.py                             # Web 启动入口
 ├── materials/
@@ -78,8 +70,10 @@
 - 登录页输入用户名+密码：
   - 用户不存在：自动注册并创建专属用户目录
   - 用户存在：校验密码后登录
+- 支持“忘记密码”：可通过 3 个密保问题校验后重置密码
+- 支持“用户中心”：可修改密码、设置/更新密保问题
 - 登录后先选择学习项目：选择“已有项目”进入进度填写，选择“新建项目”进入学习方案生成
-- 所有使用数据均以 JSON 保存在 `data/users/<username>/` 下
+- 所有使用数据均以 JSON 保存在独立用户数据目录（默认：仓库同级目录 `../csc_learnplatform_user_data/<username>/`；可通过环境变量 `USER_DATA_DIR` 覆盖）
 - 不同用户数据完全隔离
 
 ### 2.4 真实星火调用
@@ -231,6 +225,11 @@ python3 materials/http_demo.py \
 ### 6.3 用户信息与历史记录
 
 - `GET /api/user/profile`：返回当前用户、历史任务列表、最新报告
+- `GET /api/user/center`：返回用户中心摘要（账号时间、项目数量、密保状态）
+- `POST /api/user/change-password`：登录态下修改密码（需当前密码）
+- `POST /api/user/security-questions`：登录态下设置/更新 3 个密保问题
+- `POST /api/auth/security-questions`：根据用户名获取密保问题（用于忘记密码）
+- `POST /api/auth/reset-password`：回答密保问题后重置密码
 - `GET /api/projects`：返回可选学习项目（已有 run 列表）
 - `GET /api/user/run/<run_name>`：返回指定历史任务完整 JSON
 - `DELETE /api/user/run/<run_name>`：删除指定历史任务（历史索引、run 文件、对应进度日志）

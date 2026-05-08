@@ -2,7 +2,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 from requests import RequestException
 
 from backend.services.multi_agent import MultiAgentLearningSystem
@@ -19,11 +19,13 @@ LITE_CONFIG_PATH = MATERIALS_DIR / "星火SparkLite-APIkey.txt"
 DOUBAO_CONFIG_PATH = MATERIALS_DIR / "豆包Seed2.0Pro-APIkey.txt"
 KB_DIR = ROOT_DIR / "data" / "knowledge_base"
 OUTPUT_DIR = ROOT_DIR / "outputs"
-USERS_DIR = ROOT_DIR / "data" / "users"
+LEGACY_USERS_DIR = ROOT_DIR / "data" / "users"
+DEFAULT_USER_DATA_DIR = ROOT_DIR.parent / "csc_learnplatform_user_data"
+USER_DATA_DIR = Path(os.getenv("USER_DATA_DIR", "")).expanduser() if os.getenv("USER_DATA_DIR") else DEFAULT_USER_DATA_DIR
 
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 app.secret_key = os.getenv("APP_SECRET_KEY", "software-cup-spark-secret")
-user_store = UserStore(str(USERS_DIR))
+user_store = UserStore(str(USER_DATA_DIR), legacy_dir=str(LEGACY_USERS_DIR))
 
 
 def normalize_model(model: str) -> str:
@@ -72,6 +74,13 @@ def login_page():
     return render_template("login.html")
 
 
+@app.get("/forgot-password")
+def forgot_password_page():
+    if get_login_user():
+        return redirect(url_for("index"))
+    return render_template("forgot_password.html")
+
+
 @app.post("/login")
 def login_action():
     username = str(request.form.get("username", "")).strip()
@@ -91,6 +100,41 @@ def login_action():
     if created:
         return redirect(url_for("index", notice="首次登录已创建账号"))
     return redirect(url_for("index"))
+
+
+@app.post("/api/auth/security-questions")
+def auth_security_questions():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    username = str(payload.get("username", "")).strip()
+    if not username:
+        return jsonify({"error": "用户名不能为空"}), 400
+    try:
+        questions = user_store.get_security_questions(username)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"username": username, "questions": questions})
+
+
+@app.post("/api/auth/reset-password")
+def auth_reset_password():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    username = str(payload.get("username", "")).strip()
+    answers_payload = payload.get("answers", [])
+    new_password = str(payload.get("new_password", "")).strip()
+    if not username:
+        return jsonify({"error": "用户名不能为空"}), 400
+    if not isinstance(answers_payload, list):
+        return jsonify({"error": "answers 必须是数组类型"}), 400
+    answers = [str(item).strip() for item in answers_payload]
+    try:
+        user_store.reset_password_by_security_questions(username, answers, new_password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"message": "密码已重置，请使用新密码登录"})
 
 
 @app.get("/logout")
@@ -207,6 +251,91 @@ def user_profile():
             "progress_logs": user_store.get_progress_logs(username, limit=10),
         }
     )
+
+
+@app.get("/api/user/center")
+def user_center():
+    username, err = require_login_json()
+    if err:
+        return err
+    center = user_store.get_user_center(username)
+    center["avatar_url"] = "/api/user/avatar"
+    return jsonify(center)
+
+
+@app.get("/api/user/avatar")
+def user_avatar():
+    username, err = require_login_json()
+    if err:
+        return err
+    avatar_path = user_store.get_avatar(username)
+    if not avatar_path:
+        return jsonify({"error": "未设置头像"}), 404
+    suffix = avatar_path.suffix.lower()
+    mimetype = "image/png"
+    if suffix in {".jpg", ".jpeg"}:
+        mimetype = "image/jpeg"
+    elif suffix == ".webp":
+        mimetype = "image/webp"
+    return send_file(avatar_path, mimetype=mimetype)
+
+
+@app.post("/api/user/avatar")
+def upload_user_avatar():
+    username, err = require_login_json()
+    if err:
+        return err
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    avatar_data = str(payload.get("avatar_data", "")).strip()
+    if not avatar_data:
+        return jsonify({"error": "头像数据不能为空"}), 400
+    try:
+        user_store.save_avatar(username, avatar_data)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"message": "头像已更新", "avatar_url": "/api/user/avatar"})
+
+
+@app.post("/api/user/change-password")
+def user_change_password():
+    username, err = require_login_json()
+    if err:
+        return err
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    current_password = str(payload.get("current_password", "")).strip()
+    new_password = str(payload.get("new_password", "")).strip()
+    if not current_password or not new_password:
+        return jsonify({"error": "当前密码和新密码不能为空"}), 400
+    try:
+        user_store.change_password(username, current_password, new_password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"message": "密码修改成功"})
+
+
+@app.post("/api/user/security-questions")
+def user_security_questions():
+    username, err = require_login_json()
+    if err:
+        return err
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    current_password = str(payload.get("current_password", "")).strip()
+    questions = payload.get("questions", [])
+    if not current_password:
+        return jsonify({"error": "当前密码不能为空"}), 400
+    if not isinstance(questions, list):
+        return jsonify({"error": "questions 必须是数组类型"}), 400
+    try:
+        user_store.set_security_questions(username, current_password, questions)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"message": "密保问题已保存"})
 
 
 @app.get("/api/projects")

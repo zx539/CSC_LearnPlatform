@@ -16,6 +16,8 @@ const state = {
   activeController: null,
   tutorVisible: false,
   tutorMemory: [],
+  userCenter: null,
+  avatarVersion: "",
 };
 let mermaidIdSeed = 0;
 const RESOURCE_DISPLAY_ORDER = [
@@ -55,6 +57,28 @@ function setStatus(text) {
 
 function setProjectStatus(text) {
   byId("projectStatus").textContent = text;
+}
+
+function setUserCenterStatus(text) {
+  const el = byId("userCenterStatus");
+  if (!el) return;
+  el.textContent = text;
+}
+
+function refreshUserAvatar(avatarUpdatedAt = "") {
+  const img = byId("userAvatarImg");
+  const fallback = byId("userAvatarFallback");
+  if (!img || !fallback) return;
+  const version = encodeURIComponent(String(avatarUpdatedAt || state.avatarVersion || Date.now()));
+  img.src = `/api/user/avatar?v=${version}`;
+  img.onload = () => {
+    img.classList.remove("hidden-by-gate");
+    fallback.classList.add("hidden-by-gate");
+  };
+  img.onerror = () => {
+    img.classList.add("hidden-by-gate");
+    fallback.classList.remove("hidden-by-gate");
+  };
 }
 
 function setVisible(id, visible) {
@@ -451,10 +475,10 @@ function renderResourcesAsTabs(resources) {
   entries.forEach(([name, content], idx) => {
     const panelId = `resource_${idx}`;
     const tab = document.createElement("button");
-    tab.className = "tab resource-tab-dynamic";
+    tab.className = "side-nav-item resource-tab-dynamic";
     tab.dataset.tab = panelId;
     tab.textContent = name;
-    const pathTab = tabsWrap.querySelector('.tab[data-tab="path"]');
+    const pathTab = tabsWrap.querySelector('.side-nav-item[data-tab="path"]');
     if (pathTab) tabsWrap.insertBefore(tab, pathTab);
     else tabsWrap.appendChild(tab);
 
@@ -723,14 +747,20 @@ function collectFormData(formType = "progress") {
 }
 
 function setActiveTab(tabId) {
-  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".side-nav-item").forEach((t) => t.classList.remove("active"));
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
-  const tab = document.querySelector(`.tab[data-tab="${tabId}"]`);
+  const tab = document.querySelector(`.side-nav-item[data-tab="${tabId}"]`);
   if (!tab) return;
   tab.classList.add("active");
   const panel = byId(tabId);
   if (!panel) return;
   panel.classList.add("active");
+  const inUserCenter = tabId === "user_center_panel";
+  setVisible("openTestSurveyBtn", !inUserCenter);
+  setVisible("openTutorWidgetInlineBtn", !inUserCenter);
+  if (inUserCenter) {
+    hideTutorWidget();
+  }
   panel.querySelectorAll(".mermaid[data-processed='true']").forEach((node) => {
     const source = node.dataset.mermaidSource;
     if (!source) return;
@@ -898,6 +928,163 @@ async function loadProjects() {
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || "加载学习项目失败");
   renderProjectOptions(data.projects || []);
+}
+
+function renderUserCenter(data) {
+  state.userCenter = data || {};
+  state.avatarVersion = state.userCenter.avatar_updated_at || String(Date.now());
+  const summaryEl = byId("userCenterSummary");
+  if (!summaryEl) return;
+  const summary = [
+    `用户名：${state.userCenter.username || "-"}`,
+    `项目数量：${state.userCenter.project_count || 0}`,
+    `最新项目：${state.userCenter.latest_run_name || "暂无"}`,
+    `注册时间：${state.userCenter.created_at || "-"}`,
+    `最近更新：${state.userCenter.updated_at || "-"}`,
+    `密保状态：${state.userCenter.has_security_questions ? "已设置" : "未设置"}`,
+  ].join("｜");
+  summaryEl.textContent = summary;
+  const projectMeta = byId("userCenterProjectMeta");
+  if (projectMeta) {
+    projectMeta.textContent = `项目数量：${state.userCenter.project_count || 0}`;
+  }
+  const projectList = byId("userCenterProjectList");
+  if (projectList) {
+    const names = Array.isArray(state.userCenter.project_names) ? state.userCenter.project_names : [];
+    projectList.innerHTML = names.length ? names.map((name) => `<li>${escapeHtml(name)}</li>`).join("") : "<li>暂无学习项目</li>";
+  }
+  const questions = Array.isArray(state.userCenter.security_questions) ? state.userCenter.security_questions : [];
+  const questionValues = [0, 1, 2].map((idx) => String(questions[idx]?.question || ""));
+  byId("centerQuestion1").value = questionValues[0];
+  byId("centerQuestion2").value = questionValues[1];
+  byId("centerQuestion3").value = questionValues[2];
+  refreshUserAvatar(state.userCenter.avatar_updated_at || "");
+}
+
+async function loadUserCenter() {
+  const resp = await fetch("/api/user/center");
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || "加载用户中心失败");
+  renderUserCenter(data);
+}
+
+async function openUserCenter() {
+  setStep("result");
+  setActiveTab("user_center_panel");
+  hideTutorWidget();
+  setUserCenterStatus("正在加载用户信息...");
+  try {
+    await loadUserCenter();
+    setUserCenterStatus("可在此修改头像、密码与密保问题。");
+  } catch (err) {
+    setUserCenterStatus(`加载失败：${err.message}`);
+  }
+}
+
+function openModal(modalId) {
+  setVisible(modalId, true);
+}
+
+function closeModal(modalId) {
+  setVisible(modalId, false);
+}
+
+async function changePassword() {
+  const currentPassword = byId("centerCurrentPassword").value.trim();
+  const newPassword = byId("centerNewPassword").value.trim();
+  if (!currentPassword || !newPassword) {
+    setUserCenterStatus("请填写旧密码和新密码。");
+    return;
+  }
+  setUserCenterStatus("正在修改密码...");
+  try {
+    const resp = await fetch("/api/user/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "修改密码失败");
+    byId("centerCurrentPassword").value = "";
+    byId("centerNewPassword").value = "";
+    closeModal("passwordModal");
+    setUserCenterStatus("密码修改成功。");
+    await loadUserCenter();
+  } catch (err) {
+    setUserCenterStatus(`修改失败：${err.message}`);
+  }
+}
+
+async function saveSecurityQuestions() {
+  const currentPassword = byId("centerQaPassword").value.trim();
+  const questions = [
+    { question: byId("centerQuestion1").value.trim(), answer: byId("centerAnswer1").value.trim() },
+    { question: byId("centerQuestion2").value.trim(), answer: byId("centerAnswer2").value.trim() },
+    { question: byId("centerQuestion3").value.trim(), answer: byId("centerAnswer3").value.trim() },
+  ];
+  if (!currentPassword || questions.some((item) => !item.question || !item.answer)) {
+    setUserCenterStatus("请填写当前密码、3个问题和对应答案。");
+    return;
+  }
+  setUserCenterStatus("正在保存密保问题...");
+  try {
+    const resp = await fetch("/api/user/security-questions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: currentPassword, questions }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "保存密保问题失败");
+    byId("centerQaPassword").value = "";
+    byId("centerAnswer1").value = "";
+    byId("centerAnswer2").value = "";
+    byId("centerAnswer3").value = "";
+    closeModal("securityQuestionModal");
+    setUserCenterStatus("密保问题已保存。");
+    await loadUserCenter();
+  } catch (err) {
+    setUserCenterStatus(`保存失败：${err.message}`);
+  }
+}
+
+function triggerAvatarUpload() {
+  byId("avatarUploadInput").click();
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("头像读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function onAvatarFileChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    setUserCenterStatus("头像文件不能超过2MB。");
+    event.target.value = "";
+    return;
+  }
+  setUserCenterStatus("正在上传头像...");
+  try {
+    const avatarData = await fileToDataUrl(file);
+    const resp = await fetch("/api/user/avatar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avatar_data: avatarData }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "头像上传失败");
+    setUserCenterStatus("头像已更新。");
+    await loadUserCenter();
+  } catch (err) {
+    setUserCenterStatus(`头像上传失败：${err.message}`);
+  } finally {
+    event.target.value = "";
+  }
 }
 
 async function chooseExistingProject() {
@@ -1251,7 +1438,7 @@ async function askTutor() {
 function initTabs() {
   const tabsWrap = byId("resultTabs");
   tabsWrap.addEventListener("click", (event) => {
-    const tab = event.target.closest(".tab");
+    const tab = event.target.closest(".side-nav-item");
     if (!tab || !tabsWrap.contains(tab)) return;
     const tabId = tab.dataset.tab;
     if (!tabId) return;
@@ -1280,6 +1467,15 @@ async function boot() {
   byId("tutorWidgetCloseBtn").addEventListener("click", hideTutorWidget);
   byId("tutorWidgetMinBtn").addEventListener("click", toggleTutorMinimized);
   byId("clearTutorMemoryBtn").addEventListener("click", clearTutorMemory);
+  byId("avatarEntryBtn").addEventListener("click", openUserCenter);
+  byId("triggerAvatarUploadBtn").addEventListener("click", triggerAvatarUpload);
+  byId("avatarUploadInput").addEventListener("change", onAvatarFileChange);
+  byId("openChangePasswordModalBtn").addEventListener("click", () => openModal("passwordModal"));
+  byId("openSecurityQuestionModalBtn").addEventListener("click", () => openModal("securityQuestionModal"));
+  byId("closePasswordModalBtn").addEventListener("click", () => closeModal("passwordModal"));
+  byId("closeSecurityQuestionModalBtn").addEventListener("click", () => closeModal("securityQuestionModal"));
+  byId("submitChangePasswordBtn").addEventListener("click", changePassword);
+  byId("saveSecurityQuestionsBtn").addEventListener("click", saveSecurityQuestions);
   setFormMode("progress");
   try {
     restoreTutorMemory();
@@ -1291,6 +1487,7 @@ async function boot() {
   }
 
   setStep("project");
+  refreshUserAvatar();
   try {
     await loadProjects();
     setProjectStatus("请选择已有项目或新建学习项目。");

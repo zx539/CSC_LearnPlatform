@@ -15,7 +15,11 @@
       <h1>🌟 个性化学习多智能体系统</h1>
       <p>星火大模型驱动 · 标签页交互 · 明亮活泼 UI</p>
       <div class="user-bar">
-        <span>👤 {{ username }}</span>
+        <button id="avatarEntryBtn" class="user-avatar-btn" type="button" title="点击进入用户中心">
+          <img id="userAvatarImg" class="user-avatar-img hidden-by-gate" alt="用户头像" />
+          <span id="userAvatarFallback" class="user-avatar-fallback">👤</span>
+          <span class="user-name-text">{{ username }}</span>
+        </button>
         <a class="logout-link" href="/logout">退出登录</a>
       </div>
       {% if notice %}
@@ -91,23 +95,100 @@
             <button id="openTestSurveyBtn" class="btn-light" type="button">🧪 填写测试问卷（可选）</button>
             <button id="openTutorWidgetInlineBtn" class="btn-secondary" type="button">💬 打开智能辅导</button>
           </div>
-          <nav id="resultTabs" class="tabs">
-            <button class="tab active" data-tab="profile">学习画像</button>
-            <button class="tab" data-tab="resources_panel">学习资源</button>
-            <button class="tab" data-tab="path">学习路径</button>
-            <button class="tab" data-tab="evaluate">学习评估</button>
-          </nav>
+          <div class="result-shell">
+            <nav id="resultTabs" class="side-nav">
+              <button class="side-nav-item active" data-tab="profile">学习画像</button>
+              <button class="side-nav-item" data-tab="resources_panel">学习资源</button>
+              <button class="side-nav-item" data-tab="path">学习路径</button>
+              <button class="side-nav-item" data-tab="evaluate">学习评估</button>
+              <button class="side-nav-item" data-tab="user_center_panel">用户中心</button>
+            </nav>
 
-          <div class="tab-panels">
-            <section id="profile" class="panel active"></section>
-            <section id="resources_panel" class="panel"></section>
-            <section id="path" class="panel"></section>
-            <section id="evaluate" class="panel"></section>
+            <div class="tab-panels">
+              <section id="profile" class="panel active"></section>
+              <section id="resources_panel" class="panel"></section>
+              <section id="path" class="panel"></section>
+              <section id="evaluate" class="panel"></section>
+              <section id="user_center_panel" class="panel user-center-panel">
+                <div class="user-center-header">
+                  <h3>用户中心</h3>
+                  <button id="triggerAvatarUploadBtn" class="btn-light" type="button">修改头像</button>
+                  <input id="avatarUploadInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden-by-gate" />
+                </div>
+                <div id="userCenterSummary" class="muted-text">正在加载用户信息...</div>
+                <div class="user-center-actions-row">
+                  <button id="openChangePasswordModalBtn" class="btn-secondary" type="button">修改密码</button>
+                  <button id="openSecurityQuestionModalBtn" class="btn-primary" type="button">设置密保问题</button>
+                </div>
+                <section class="user-center-projects">
+                  <h4>学习项目</h4>
+                  <p id="userCenterProjectMeta" class="muted-text">项目数量：0</p>
+                  <ul id="userCenterProjectList" class="user-project-list"></ul>
+                </section>
+                <p id="userCenterStatus" class="status">提示：点击上方按钮可通过弹窗修改密码与密保。</p>
+              </section>
+            </div>
           </div>
         </section>
       </div>
     </section>
   </main>
+
+  <div id="passwordModal" class="loading-modal hidden-by-gate" aria-modal="true" role="dialog">
+    <div class="loading-modal-content user-modal-content">
+      <h3>修改密码</h3>
+      <label>
+        旧密码
+        <input id="centerCurrentPassword" type="password" placeholder="请输入旧密码" />
+      </label>
+      <label>
+        新密码（至少6位）
+        <input id="centerNewPassword" type="password" placeholder="请输入新密码" />
+      </label>
+      <div class="actions">
+        <button id="submitChangePasswordBtn" class="btn-primary" type="button">确认修改</button>
+        <button id="closePasswordModalBtn" class="btn-light" type="button">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="securityQuestionModal" class="loading-modal hidden-by-gate" aria-modal="true" role="dialog">
+    <div class="loading-modal-content user-modal-content">
+      <h3>设置密保问题</h3>
+      <label>
+        当前密码（用于校验身份）
+        <input id="centerQaPassword" type="password" placeholder="请输入当前密码" />
+      </label>
+      <label>
+        问题1
+        <input id="centerQuestion1" placeholder="例如：你的小学班主任姓名？" />
+      </label>
+      <label>
+        答案1
+        <input id="centerAnswer1" type="password" placeholder="请输入答案1" />
+      </label>
+      <label>
+        问题2
+        <input id="centerQuestion2" placeholder="例如：你最喜欢的城市？" />
+      </label>
+      <label>
+        答案2
+        <input id="centerAnswer2" type="password" placeholder="请输入答案2" />
+      </label>
+      <label>
+        问题3
+        <input id="centerQuestion3" placeholder="例如：你的第一位同桌名字？" />
+      </label>
+      <label>
+        答案3
+        <input id="centerAnswer3" type="password" placeholder="请输入答案3" />
+      </label>
+      <div class="actions">
+        <button id="saveSecurityQuestionsBtn" class="btn-primary" type="button">保存密保问题</button>
+        <button id="closeSecurityQuestionModalBtn" class="btn-light" type="button">取消</button>
+      </div>
+    </div>
+  </div>
 
   <button id="tutorToggleFab" class="tutor-fab hidden-by-gate" type="button">💬 智能辅导</button>
   <section id="tutorWidget" class="tutor-widget hidden-by-gate">
