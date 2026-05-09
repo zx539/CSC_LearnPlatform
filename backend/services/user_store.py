@@ -66,6 +66,10 @@ class UserStore:
         avatar_file = str(user.get("avatar_file", "")).strip()
         if not avatar_file:
             return None
+        if avatar_file != Path(avatar_file).name:
+            return None
+        if not re.fullmatch(r"avatar\.(png|jpg|jpeg|webp)", avatar_file, flags=re.IGNORECASE):
+            return None
         path = self._user_dir(username) / avatar_file
         if not path.exists():
             return None
@@ -380,17 +384,26 @@ class UserStore:
         match = re.match(r"^data:image/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$", str(avatar_data_url).strip())
         if not match:
             raise ValueError("头像格式不合法，仅支持 png/jpg/webp")
+        encoded = match.group(2)
+        if len(encoded) > 3 * 1024 * 1024:
+            raise ValueError("头像数据过大")
         ext = match.group(1).lower()
         if ext == "jpeg":
             ext = "jpg"
         try:
-            raw = base64.b64decode(match.group(2), validate=True)
+            raw = base64.b64decode(encoded, validate=True)
         except ValueError as exc:
             raise ValueError("头像数据解析失败") from exc
         if not raw:
             raise ValueError("头像数据不能为空")
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("头像文件不能超过2MB")
+        if ext == "png" and not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("PNG 头像文件头不合法")
+        if ext == "jpg" and not raw.startswith(b"\xff\xd8"):
+            raise ValueError("JPG 头像文件头不合法")
+        if ext == "webp" and not (raw.startswith(b"RIFF") and raw[8:12] == b"WEBP"):
+            raise ValueError("WEBP 头像文件头不合法")
 
         user_dir = self._user_dir(username)
         for old in user_dir.glob("avatar.*"):

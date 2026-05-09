@@ -65,6 +65,41 @@ function setUserCenterStatus(text) {
   el.textContent = text;
 }
 
+function normalizeQuestionType(question = {}) {
+  const rawType = String(question.type || "").trim().toLowerCase();
+  if (["single_choice", "single", "radio", "单选"].includes(rawType)) return "single_choice";
+  if (["multi_choice", "multiple", "checkbox", "多选"].includes(rawType)) return "multi_choice";
+  if (["scale", "rating", "量表"].includes(rawType)) return "scale";
+  const options = Array.isArray(question.options) ? question.options.filter((item) => String(item || "").trim()) : [];
+  const text = String(question.question || "").trim();
+  if (!options.length) return "text";
+  const allNumeric = options.every((opt) => /^\d+(\.\d+)?$/.test(String(opt).trim()));
+  if (allNumeric && options.length >= 3) return "scale";
+  if (text.includes("哪些") || text.includes("多选") || text.includes("可多选")) return "multi_choice";
+  if (options.length > 2) return "multi_choice";
+  return "single_choice";
+}
+
+function normalizeFormTemplate(template = {}) {
+  const questions = Array.isArray(template.questions) ? template.questions : [];
+  const normalizedQuestions = questions
+    .filter((item) => item && typeof item === "object")
+    .map((question, idx) => {
+      const options = Array.isArray(question.options) ? question.options.filter((item) => String(item || "").trim()) : [];
+      return {
+        ...question,
+        id: String(question.id || `q${idx + 1}`),
+        question: String(question.question || "").trim() || `问题${idx + 1}`,
+        type: normalizeQuestionType(question),
+        options,
+      };
+    });
+  return {
+    ...template,
+    questions: normalizedQuestions,
+  };
+}
+
 function refreshUserAvatar(avatarUpdatedAt = "") {
   const img = byId("userAvatarImg");
   const fallback = byId("userAvatarFallback");
@@ -690,7 +725,7 @@ function renderProgressQuestion() {
 }
 
 function renderProgressForm(template = {}, latestCheckin = null) {
-  state.progressFormTemplate = template || {};
+  state.progressFormTemplate = normalizeFormTemplate(template || {});
   state.progressCurrentIndex = 0;
   if (latestCheckin && latestCheckin.questionnaire_type === "progress") {
     const answers = {};
@@ -704,7 +739,7 @@ function renderProgressForm(template = {}, latestCheckin = null) {
 }
 
 function renderTestForm(template = {}, latestCheckin = null) {
-  state.testFormTemplate = template || {};
+  state.testFormTemplate = normalizeFormTemplate(template || {});
   if (latestCheckin && latestCheckin.questionnaire_type === "test") {
     const answers = {};
     (latestCheckin.responses || []).forEach((item) => {
@@ -755,12 +790,8 @@ function setActiveTab(tabId) {
   const panel = byId(tabId);
   if (!panel) return;
   panel.classList.add("active");
-  const inUserCenter = tabId === "user_center_panel";
-  setVisible("openTestSurveyBtn", !inUserCenter);
-  setVisible("openTutorWidgetInlineBtn", !inUserCenter);
-  if (inUserCenter) {
-    hideTutorWidget();
-  }
+  setVisible("openTestSurveyBtn", true);
+  setVisible("openTutorWidgetInlineBtn", true);
   panel.querySelectorAll(".mermaid[data-processed='true']").forEach((node) => {
     const source = node.dataset.mermaidSource;
     if (!source) return;
@@ -785,8 +816,7 @@ function clearResultPanels() {
 }
 
 function getTutorMemoryStorageKey() {
-  const userNameText = document.querySelector(".user-bar span")?.textContent || "";
-  const userName = userNameText.replace("👤", "").trim() || "anonymous";
+  const userName = document.querySelector(".user-name-text")?.textContent?.trim() || "anonymous";
   return `tutor-memory:${userName}`;
 }
 
@@ -969,9 +999,7 @@ async function loadUserCenter() {
 }
 
 async function openUserCenter() {
-  setStep("result");
-  setActiveTab("user_center_panel");
-  hideTutorWidget();
+  openModal("userCenterModal");
   setUserCenterStatus("正在加载用户信息...");
   try {
     await loadUserCenter();
@@ -1063,6 +1091,12 @@ function fileToDataUrl(file) {
 async function onAvatarFileChange(event) {
   const file = event.target.files?.[0];
   if (!file) return;
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+  if (!allowedTypes.has(file.type)) {
+    setUserCenterStatus("仅支持 PNG/JPEG/WEBP 格式头像。");
+    event.target.value = "";
+    return;
+  }
   if (file.size > 2 * 1024 * 1024) {
     setUserCenterStatus("头像文件不能超过2MB。");
     event.target.value = "";
@@ -1255,8 +1289,8 @@ async function generate() {
 
   if (!data) return;
   state.selectedRunName = data.run_name || state.selectedRunName;
-  state.testFormTemplate = data.report?.test_form_template || state.testFormTemplate || {};
-  state.progressFormTemplate = data.report?.progress_form_template || state.progressFormTemplate || {};
+  state.testFormTemplate = normalizeFormTemplate(data.report?.test_form_template || state.testFormTemplate || {});
+  state.progressFormTemplate = normalizeFormTemplate(data.report?.progress_form_template || state.progressFormTemplate || {});
   renderReport(data.report || {}, data.report_markdown || {});
   setActiveTab("profile");
   setStep("result");
@@ -1363,12 +1397,12 @@ async function submitTest() {
 
   if (data.next_progress_form && typeof data.next_progress_form === "object") {
     state.report.progress_form_template = data.next_progress_form;
-    state.progressFormTemplate = data.next_progress_form;
+    state.progressFormTemplate = normalizeFormTemplate(data.next_progress_form);
     state.progressAnswers = {};
   }
   if (data.next_test_form && typeof data.next_test_form === "object") {
     state.report.test_form_template = data.next_test_form;
-    state.testFormTemplate = data.next_test_form;
+    state.testFormTemplate = normalizeFormTemplate(data.next_test_form);
     state.testAnswers = {};
   }
   state.reportMarkdown = data.report_markdown || state.reportMarkdown;
@@ -1472,6 +1506,7 @@ async function boot() {
   byId("avatarUploadInput").addEventListener("change", onAvatarFileChange);
   byId("openChangePasswordModalBtn").addEventListener("click", () => openModal("passwordModal"));
   byId("openSecurityQuestionModalBtn").addEventListener("click", () => openModal("securityQuestionModal"));
+  byId("closeUserCenterModalBtn").addEventListener("click", () => closeModal("userCenterModal"));
   byId("closePasswordModalBtn").addEventListener("click", () => closeModal("passwordModal"));
   byId("closeSecurityQuestionModalBtn").addEventListener("click", () => closeModal("securityQuestionModal"));
   byId("submitChangePasswordBtn").addEventListener("click", changePassword);

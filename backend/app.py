@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 from pathlib import Path
+import re
 
 from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 from requests import RequestException
@@ -65,6 +66,71 @@ def require_login_json():
     if not user:
         return None, (jsonify({"error": "请先登录"}), 401)
     return user, None
+
+
+def extract_profile_core(profile_payload: dict) -> dict:
+    profile = profile_payload if isinstance(profile_payload, dict) else {}
+    inner = profile.get("profile")
+    if isinstance(inner, dict):
+        nested_inner = inner.get("profile")
+        if isinstance(nested_inner, dict):
+            return nested_inner
+        return inner
+    return profile
+
+
+def normalize_form_template(template: dict) -> dict:
+    if not isinstance(template, dict):
+        return {}
+    questions = template.get("questions", [])
+    if not isinstance(questions, list):
+        questions = []
+    normalized_questions: list[dict] = []
+    for idx, item in enumerate(questions, start=1):
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("id", f"q{idx}")).strip() or f"q{idx}"
+        question = str(item.get("question", "")).strip() or f"问题{idx}"
+        raw_type = str(item.get("type", "")).strip().lower()
+        options = item.get("options", [])
+        if not isinstance(options, list):
+            options = []
+        options = [str(opt).strip() for opt in options if str(opt).strip()]
+        q_type = "text"
+        if raw_type in {"single", "single_choice", "radio", "单选"}:
+            q_type = "single_choice"
+        elif raw_type in {"multiple", "multi_choice", "checkbox", "多选"}:
+            q_type = "multi_choice"
+        elif raw_type in {"scale", "rating", "量表"}:
+            q_type = "scale"
+        elif options:
+            if all(re.fullmatch(r"\d+(?:\.\d+)?", opt) for opt in options) and len(options) >= 3:
+                q_type = "scale"
+            elif any(keyword in question for keyword in ("哪些", "多选", "可多选")) or len(options) > 2:
+                q_type = "multi_choice"
+            else:
+                q_type = "single_choice"
+        normalized_questions.append(
+            {
+                "id": qid,
+                "question": question,
+                "type": q_type,
+                "options": options,
+                "required": bool(item.get("required", True)),
+                "dimension": str(item.get("dimension", "学习进度")).strip() or "学习进度",
+            }
+        )
+    normalized = dict(template)
+    normalized["questions"] = normalized_questions
+    return normalized
+
+
+def normalize_report_forms(report: dict) -> dict:
+    if not isinstance(report, dict):
+        return {}
+    report["progress_form_template"] = normalize_form_template(report.get("progress_form_template", {}))
+    report["test_form_template"] = normalize_form_template(report.get("test_form_template", {}))
+    return report
 
 
 @app.get("/login")
@@ -356,6 +422,9 @@ def user_run(run_name: str):
     payload = user_store.get_run(username, run_name)
     if payload is None:
         return jsonify({"error": "未找到该历史记录"}), 404
+    report = payload.get("report")
+    if isinstance(report, dict):
+        payload["report"] = normalize_report_forms(report)
     return jsonify(payload)
 
 
@@ -405,11 +474,14 @@ def progress_checkin():
     report = target_payload.get("report")
     if not isinstance(report, dict):
         return jsonify({"error": "历史报告格式错误"}), 500
+    report = normalize_report_forms(report)
+    target_payload["report"] = report
 
     profile = report.get("profile")
     path = report.get("learning_path")
     if not isinstance(profile, dict) or not isinstance(path, dict):
         return jsonify({"error": "历史报告缺少学习画像或学习路径"}), 500
+    profile_core = extract_profile_core(profile)
 
     req_payload = target_payload.get("request", {})
     default_model = "4.0Ultra"
@@ -419,7 +491,7 @@ def progress_checkin():
 
     system = create_system(model=model)
     try:
-        evaluation = system.evaluate_learning(progress_payload=checkin, profile=profile, path=path)
+        evaluation = system.evaluate_learning(progress_payload=checkin, profile=profile_core, path=path)
     except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
         return jsonify({"error": str(exc)}), 500
     report["evaluation"] = evaluation
@@ -460,7 +532,7 @@ def progress_checkin():
             next_progress_form = system.build_progress_form(
                 topic=topic,
                 path=path,
-                profile=profile,
+                profile=profile_core,
                 stage_no=stage_no,
                 last_checkin=checkin,
                 last_evaluation=evaluation,
@@ -468,7 +540,7 @@ def progress_checkin():
             next_test_form = system.build_test_form(
                 topic=topic,
                 path=path,
-                profile=profile,
+                profile=profile_core,
                 stage_no=stage_no,
                 last_checkin=checkin,
                 last_evaluation=evaluation,

@@ -624,6 +624,21 @@ class MultiAgentLearningSystem:
             return "scale"
         return "text"
 
+    def _repair_question_type(self, question: str, q_type: str, options: List[str]) -> str:
+        normalized = self._normalize_question_type(q_type)
+        if normalized != "text":
+            return normalized
+        if not options:
+            return normalized
+        question_text = _stringify(question).strip()
+        if all(re.fullmatch(r"\d+(?:\.\d+)?", opt) for opt in options) and 3 <= len(options) <= 10:
+            return "scale"
+        if any(keyword in question_text for keyword in ("哪些", "多选", "可多选")):
+            return "multi_choice"
+        if len(options) > 2:
+            return "multi_choice"
+        return "single_choice"
+
     def _find_stage(self, path: Dict, stage_no: int) -> Dict[str, Any]:
         stages = path.get("stages", []) or []
         for stage in stages:
@@ -743,6 +758,7 @@ class MultiAgentLearningSystem:
                 if not isinstance(options, list):
                     options = []
                 options = [_stringify(opt) for opt in options if _stringify(opt)]
+                q_type = self._repair_question_type(_stringify(q.get("question", "")), q_type, options)
                 if q_type in {"single_choice", "multi_choice", "scale"} and not options:
                     if q_type == "scale":
                         options = ["1", "2", "3", "4", "5"]
@@ -863,6 +879,7 @@ class MultiAgentLearningSystem:
                 if not isinstance(options, list):
                     options = []
                 options = [_stringify(opt) for opt in options if _stringify(opt)]
+                q_type = self._repair_question_type(_stringify(q.get("question", "")), q_type, options)
                 if q_type in {"single_choice", "multi_choice", "scale"} and not options:
                     if q_type == "scale":
                         options = ["1", "2", "3", "4", "5"]

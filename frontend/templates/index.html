@@ -101,7 +101,6 @@
               <button class="side-nav-item" data-tab="resources_panel">学习资源</button>
               <button class="side-nav-item" data-tab="path">学习路径</button>
               <button class="side-nav-item" data-tab="evaluate">学习评估</button>
-              <button class="side-nav-item" data-tab="user_center_panel">用户中心</button>
             </nav>
 
             <div class="tab-panels">
@@ -109,30 +108,34 @@
               <section id="resources_panel" class="panel"></section>
               <section id="path" class="panel"></section>
               <section id="evaluate" class="panel"></section>
-              <section id="user_center_panel" class="panel user-center-panel">
-                <div class="user-center-header">
-                  <h3>用户中心</h3>
-                  <button id="triggerAvatarUploadBtn" class="btn-light" type="button">修改头像</button>
-                  <input id="avatarUploadInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden-by-gate" />
-                </div>
-                <div id="userCenterSummary" class="muted-text">正在加载用户信息...</div>
-                <div class="user-center-actions-row">
-                  <button id="openChangePasswordModalBtn" class="btn-secondary" type="button">修改密码</button>
-                  <button id="openSecurityQuestionModalBtn" class="btn-primary" type="button">设置密保问题</button>
-                </div>
-                <section class="user-center-projects">
-                  <h4>学习项目</h4>
-                  <p id="userCenterProjectMeta" class="muted-text">项目数量：0</p>
-                  <ul id="userCenterProjectList" class="user-project-list"></ul>
-                </section>
-                <p id="userCenterStatus" class="status">提示：点击上方按钮可通过弹窗修改密码与密保。</p>
-              </section>
             </div>
           </div>
         </section>
       </div>
     </section>
   </main>
+
+  <div id="userCenterModal" class="loading-modal hidden-by-gate" aria-modal="true" role="dialog">
+    <div class="loading-modal-content user-modal-content">
+      <div class="user-center-header">
+        <h3>用户中心</h3>
+        <button id="closeUserCenterModalBtn" class="btn-light" type="button">关闭</button>
+      </div>
+      <div class="user-center-actions-row">
+        <button id="triggerAvatarUploadBtn" class="btn-light" type="button">修改头像</button>
+        <button id="openChangePasswordModalBtn" class="btn-secondary" type="button">修改密码</button>
+        <button id="openSecurityQuestionModalBtn" class="btn-primary" type="button">设置密保问题</button>
+        <input id="avatarUploadInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden-by-gate" />
+      </div>
+      <div id="userCenterSummary" class="muted-text">正在加载用户信息...</div>
+      <section class="user-center-projects">
+        <h4>学习项目</h4>
+        <p id="userCenterProjectMeta" class="muted-text">项目数量：0</p>
+        <ul id="userCenterProjectList" class="user-project-list"></ul>
+      </section>
+      <p id="userCenterStatus" class="status">提示：点击上方按钮可通过弹窗修改密码与密保。</p>
+    </div>
+  </div>
 
   <div id="passwordModal" class="loading-modal hidden-by-gate" aria-modal="true" role="dialog">
     <div class="loading-modal-content user-modal-content">
