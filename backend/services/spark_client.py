@@ -157,14 +157,14 @@ class SparkClient:
         choices = data.get("choices", [])
         if isinstance(choices, list) and choices:
             choice = choices[0] if isinstance(choices[0], dict) else {}
-            message = choice.get("message", {})
-            if isinstance(message, dict):
-                text = self._extract_message_content(message)
-                if text:
-                    return text
             delta = choice.get("delta", {})
             if isinstance(delta, dict):
                 text = self._extract_message_content(delta)
+                if text:
+                    return text
+            message = choice.get("message", {})
+            if isinstance(message, dict):
+                text = self._extract_message_content(message)
                 if text:
                     return text
             # 兼容部分 lite 返回: choices[0].text
@@ -215,6 +215,7 @@ class SparkClient:
 
     def _read_stream_content(self, resp: requests.Response) -> str:
         chunks: List[str] = []
+        latest_message = ""
         for raw_line in resp.iter_lines(decode_unicode=True):
             if raw_line is None:
                 continue
@@ -231,10 +232,27 @@ class SparkClient:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            text = self._extract_content(payload)
+            choices = payload.get("choices", [])
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            delta = choice.get("delta", {})
+            delta_text = self._extract_message_content(delta) if isinstance(delta, dict) else ""
+            if delta_text:
+                chunks.append(delta_text)
+                continue
+            message = choice.get("message", {})
+            message_text = self._extract_message_content(message) if isinstance(message, dict) else ""
+            if message_text:
+                # 某些服务端在流式分片中返回“累计全文”，此处只保留最新全文，避免重复拼接造成JSON损坏。
+                latest_message = message_text
+                continue
+            text = str(choice.get("text", "")).strip()
             if text:
                 chunks.append(text)
-        return "".join(chunks).strip()
+        if chunks:
+            return "".join(chunks).strip()
+        return latest_message.strip()
 
     def chat(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
         headers = {"Authorization": self.authorization, "content-type": "application/json"}

@@ -10,16 +10,41 @@ from .spark_client import SparkClient
 
 
 def extract_json_block(text: str) -> Dict:
-    body = text.strip()
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError:
-        pass
+    body = _stringify(text).strip()
+    if not body:
+        raise ValueError("模型返回为空，未找到JSON结构")
 
-    match = re.search(r"\{[\s\S]*\}", body)
-    if not match:
-        raise ValueError("未找到JSON结构")
-    return json.loads(match.group(0))
+    candidates = [body]
+    fenced = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", body, flags=re.IGNORECASE)
+    if fenced:
+        candidates.insert(0, _stringify(fenced.group(1)).strip())
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+        decoder = json.JSONDecoder()
+        search_from = 0
+        while True:
+            start = candidate.find("{", search_from)
+            if start < 0:
+                break
+            try:
+                payload, _ = decoder.raw_decode(candidate[start:])
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+            search_from = start + 1
+
+    preview = body[:240].replace("\n", "\\n")
+    raise ValueError(f"未能解析模型返回JSON，片段: {preview}")
 
 
 def _stringify(value: Any) -> str:
