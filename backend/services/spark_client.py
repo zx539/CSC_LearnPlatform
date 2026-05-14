@@ -247,24 +247,48 @@ class SparkClient:
 
     @staticmethod
     def _is_retryable_overload_response(resp: requests.Response) -> bool:
-        if resp.status_code not in {429, 503}:
+        if resp.status_code not in {429, 503, 504}:
             return False
+        if resp.status_code == 504:
+            return True
         text = (resp.text or "").strip()
         if "ServerOverloaded" in text or "TooManyRequests" in text:
             return True
         try:
             payload = resp.json()
         except ValueError:
-            return resp.status_code in {429, 503}
+            return resp.status_code in {429, 503, 504}
         if not isinstance(payload, dict):
-            return resp.status_code in {429, 503}
+            return resp.status_code in {429, 503, 504}
         err = payload.get("error", {})
         if not isinstance(err, dict):
-            return resp.status_code in {429, 503}
+            return resp.status_code in {429, 503, 504}
         code = str(err.get("code", "")).strip()
         err_type = str(err.get("type", "")).strip()
         message = str(err.get("message", "")).strip()
         return code in {"ServerOverloaded", "TooManyRequests"} or err_type == "TooManyRequests" or "overload" in message.lower()
+
+    @staticmethod
+    def _is_gateway_timeout_response(resp: requests.Response) -> bool:
+        if resp.status_code != 504:
+            return False
+        text = (resp.text or "").lower()
+        return (
+            ("gateway time-out" in text)
+            or ("gateway timeout" in text)
+            or ("upstream timed out" in text)
+            or (not text.strip())
+        )
+
+    def _build_gateway_timeout_error(self, resp: requests.Response) -> RuntimeError:
+        model_key = str(self.model or "").strip().lower()
+        hint = "模型服务网关超时（HTTP 504）"
+        if model_key in self._DOUBAO_MODELS:
+            hint += "（豆包模型高峰期常见）"
+        return RuntimeError(
+            f"{hint}。请稍后重试，或调低并发/QPS并增加重试次数。"
+            f"模型={self.model}, URL={self._request_url()}"
+        )
 
     def _looks_like_html_response(self, resp: requests.Response) -> bool:
         content_type = str(resp.headers.get("Content-Type", "")).lower()
@@ -363,6 +387,8 @@ class SparkClient:
                         continue
                     if self._is_retryable_overload_response(resp):
                         if attempt >= self.max_retries:
+                            if self._is_gateway_timeout_response(resp):
+                                raise self._build_gateway_timeout_error(resp)
                             raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
                         retry_after = self._retry_after_seconds(resp)
                         backoff = max(retry_after, self.retry_interval * (2**attempt) + random.uniform(0.0, 0.6))
@@ -384,6 +410,8 @@ class SparkClient:
                 raise RuntimeError("模型请求未发出，请重试。")
             try:
                 if resp.status_code >= 400:
+                    if self._is_gateway_timeout_response(resp):
+                        raise self._build_gateway_timeout_error(resp)
                     raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
                 if self._looks_like_html_response(resp):
                     raise self._build_non_json_error(resp)
