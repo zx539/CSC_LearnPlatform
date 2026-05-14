@@ -18,6 +18,7 @@ MATERIALS_DIR = ROOT_DIR / "materials"
 ULTRA_CONFIG_PATH = MATERIALS_DIR / "星火SparkUltra-APIkey.txt"
 LITE_CONFIG_PATH = MATERIALS_DIR / "星火SparkLite-APIkey.txt"
 DOUBAO_CONFIG_PATH = MATERIALS_DIR / "豆包Seed2.0Pro-APIkey.txt"
+DOUBAO_LITE_CONFIG_PATH = MATERIALS_DIR / "豆包Seed2.0Lite-APIkey.txt"
 KB_DIR = ROOT_DIR / "data" / "knowledge_base"
 OUTPUT_DIR = ROOT_DIR / "outputs"
 LEGACY_USERS_DIR = ROOT_DIR / "data" / "users"
@@ -33,6 +34,8 @@ def normalize_model(model: str) -> str:
     normalized = str(model or "").strip().lower()
     if normalized in {"lite", "sparklite", "4.0lite"}:
         return "lite"
+    if normalized in {"doubao-lite", "doubao-seed-2-0-lite-260428", "seed2.0lite", "seed2-lite"}:
+        return "doubao-seed-2-0-lite-260428"
     if normalized in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
         return "doubao-seed-2-0-pro-260215"
     return "4.0Ultra"
@@ -42,6 +45,8 @@ def resolve_model_config_path(model: str) -> Path:
     normalized = normalize_model(model)
     if normalized == "lite":
         return LITE_CONFIG_PATH
+    if normalized == "doubao-seed-2-0-lite-260428":
+        return DOUBAO_LITE_CONFIG_PATH
     if normalized == "doubao-seed-2-0-pro-260215":
         return DOUBAO_CONFIG_PATH
     return ULTRA_CONFIG_PATH

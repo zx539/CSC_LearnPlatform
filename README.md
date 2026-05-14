@@ -97,6 +97,10 @@
 ### 3.2 安装依赖
 
 ```bash
+# macOS / Windows / 通用
+pip3 install -r requirements.txt
+
+# Ubuntu 系统 Python 受管环境（如需要）
 pip3 install --break-system-packages -r requirements.txt
 ```
 
@@ -121,6 +125,8 @@ export SPARK_LITE_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completions
 export SPARK_LITE_API_AUTH="Bearer 你的Lite模型密钥"
 export DOUBAO_API_URL="https://ark.cn-beijing.volces.com/api/v3"
 export DOUBAO_API_KEY="你的豆包密钥"
+export DOUBAO_LITE_API_URL="https://ark.cn-beijing.volces.com/api/v3"
+export DOUBAO_LITE_API_KEY="你的豆包Lite密钥"
 
 # 单密钥兼容写法（可选）
 export SPARK_API_URL="https://spark-api-open.xf-yun.com/v1/chat/completions"
@@ -149,7 +155,14 @@ export SPARK_LITE_STREAM="1"
 export SPARK_LITE_MAX_RETRIES="4"
 export DOUBAO_MAX_PARALLEL="6"
 export DOUBAO_READ_TIMEOUT="180"
+export DOUBAO_LITE_MAX_PARALLEL="1"
+export DOUBAO_LITE_MAX_QPS="0.5"
+export DOUBAO_LITE_MAX_RETRIES="5"
+export DOUBAO_LITE_RETRY_INTERVAL="1.2"
+export DOUBAO_LITE_READ_TIMEOUT="180"
 ```
+
+> 使用 `doubao-seed-2-0-lite-260428` 时，建议同时设置 `RESOURCE_MAX_PARALLEL="1"`，避免资源生成阶段并发触发模型侧“上限 1”限流。
 
 ---
 

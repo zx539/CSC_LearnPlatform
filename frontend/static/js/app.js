@@ -20,6 +20,7 @@ const state = {
   avatarVersion: "",
 };
 let mermaidIdSeed = 0;
+let mermaidRenderQueue = Promise.resolve();
 const RESOURCE_DISPLAY_ORDER = [
   "课程讲解文档",
   "知识点思维导图(Mermaid)",
@@ -168,9 +169,27 @@ function cancelCurrentRequest() {
 
 function escapeHtml(text) {
   return String(text || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+async function readApiResponse(resp) {
+  const contentType = String(resp.headers.get("content-type") || "").toLowerCase();
+  if (contentType.includes("application/json")) {
+    return await resp.json();
+  }
+  const text = await resp.text();
+  const trimmed = String(text || "").trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (_) {
+      // keep falling through for clear error message
+    }
+  }
+  const preview = trimmed.replace(/\s+/g, " ").slice(0, 160);
+  throw new Error(`接口返回非JSON响应（HTTP ${resp.status}）：${preview || "empty body"}`);
 }
 
 function configureMarkdownRenderer() {
@@ -399,12 +418,19 @@ function enhanceMarkdown(container) {
     if (!isVisible) return;
     const nodes = Array.from(container.querySelectorAll(".mermaid")).filter((node) => node.getAttribute("data-processed") !== "true");
     if (nodes.length) {
-      Promise.resolve(mermaid.run({ nodes })).catch(() => {
-        nodes.forEach((node) => {
-          if (node.getAttribute("data-processed") === "true") return;
-          node.classList.add("mermaid-failed");
+      mermaidRenderQueue = mermaidRenderQueue
+        .then(() => mermaid.run({ nodes }))
+        .catch(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          try {
+            await mermaid.run({ nodes });
+          } catch (_) {
+            nodes.forEach((node) => {
+              if (node.getAttribute("data-processed") === "true") return;
+              node.classList.add("mermaid-failed");
+            });
+          }
         });
-      });
     }
   }
 }
@@ -614,7 +640,7 @@ function renderProjectOptions(runs) {
       setProjectStatus(`正在删除学习项目：${runName} ...`);
       try {
         const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`, { method: "DELETE" });
-        const result = await resp.json();
+        const result = await readApiResponse(resp);
         if (!resp.ok) throw new Error(result.error || "删除失败");
         if (state.selectedRunName === runName) {
           state.selectedRunName = "";
@@ -819,12 +845,6 @@ function setActiveTab(tabId) {
   panel.classList.add("active");
   setVisible("openTestSurveyBtn", true);
   setVisible("openTutorWidgetInlineBtn", true);
-  panel.querySelectorAll(".mermaid[data-processed='true']").forEach((node) => {
-    const source = node.dataset.mermaidSource;
-    if (!source) return;
-    node.textContent = source;
-    node.removeAttribute("data-processed");
-  });
   // Mermaid 在隐藏容器中有概率不渲染，切换到当前标签时再次增强渲染。
   enhanceMarkdown(panel);
 }
@@ -982,7 +1002,7 @@ function initTutorWidgetDrag() {
 
 async function loadProjects() {
   const resp = await fetch("/api/projects");
-  const data = await resp.json();
+  const data = await readApiResponse(resp);
   if (!resp.ok) throw new Error(data.error || "加载学习项目失败");
   renderProjectOptions(data.projects || []);
 }
@@ -1020,7 +1040,7 @@ function renderUserCenter(data) {
 
 async function loadUserCenter() {
   const resp = await fetch("/api/user/center");
-  const data = await resp.json();
+  const data = await readApiResponse(resp);
   if (!resp.ok) throw new Error(data.error || "加载用户中心失败");
   renderUserCenter(data);
 }
@@ -1058,7 +1078,7 @@ async function changePassword() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     });
-    const data = await resp.json();
+    const data = await readApiResponse(resp);
     if (!resp.ok) throw new Error(data.error || "修改密码失败");
     byId("centerCurrentPassword").value = "";
     byId("centerNewPassword").value = "";
@@ -1088,7 +1108,7 @@ async function saveSecurityQuestions() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ current_password: currentPassword, questions }),
     });
-    const data = await resp.json();
+    const data = await readApiResponse(resp);
     if (!resp.ok) throw new Error(data.error || "保存密保问题失败");
     byId("centerQaPassword").value = "";
     byId("centerAnswer1").value = "";
@@ -1137,7 +1157,7 @@ async function onAvatarFileChange(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ avatar_data: avatarData }),
     });
-    const data = await resp.json();
+    const data = await readApiResponse(resp);
     if (!resp.ok) throw new Error(data.error || "头像上传失败");
     setUserCenterStatus("头像已更新。");
     await loadUserCenter();
@@ -1156,7 +1176,7 @@ async function chooseExistingProject() {
   }
   const data = await withLoading("正在动态加载已选项目与进度问卷...", async () => {
     const resp = await fetch(`/api/user/run/${encodeURIComponent(runName)}`);
-    const result = await resp.json();
+    const result = await readApiResponse(resp);
     if (!resp.ok) throw new Error(result.error || "加载已有项目失败");
     return result;
   }).catch((err) => {
@@ -1300,7 +1320,7 @@ async function generate() {
         body: JSON.stringify(payload),
         signal,
       });
-      const result = await resp.json();
+      const result = await readApiResponse(resp);
       if (!resp.ok) throw new Error(result.error || "生成失败");
       return result;
     },
@@ -1355,7 +1375,7 @@ async function submitProgress() {
         }),
         signal,
       });
-      const result = await resp.json();
+      const result = await readApiResponse(resp);
       if (!resp.ok) throw new Error(result.error || "提交失败");
       return result;
     },
@@ -1407,7 +1427,7 @@ async function submitTest() {
         }),
         signal,
       });
-      const result = await resp.json();
+      const result = await readApiResponse(resp);
       if (!resp.ok) throw new Error(result.error || "提交失败");
       return result;
     },
@@ -1472,7 +1492,7 @@ async function askTutor() {
         }),
         signal,
       });
-      const result = await resp.json();
+      const result = await readApiResponse(resp);
       if (!resp.ok) throw new Error(result.error || "辅导失败");
       return result;
     },

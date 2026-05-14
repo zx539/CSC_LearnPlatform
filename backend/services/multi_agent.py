@@ -75,7 +75,7 @@ class MultiAgentLearningSystem:
         self.kb_dir = Path(kb_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        default_resource_parallel = "2" if self._is_lite_model(getattr(self.spark, "model", "")) else "3"
+        default_resource_parallel = "1" if self._is_lite_model(getattr(self.spark, "model", "")) else "3"
         default_form_parallel = "1" if self._is_lite_model(getattr(self.spark, "model", "")) else "2"
         self.resource_max_parallel = max(
             1,

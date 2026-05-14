@@ -10,6 +10,9 @@ import requests
 
 
 class SparkClient:
+    _DOUBAO_LITE_MODELS = {"doubao-lite", "seed2.0lite", "seed2-lite", "doubao-seed-2-0-lite-260428"}
+    _DOUBAO_PRO_MODELS = {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}
+    _DOUBAO_MODELS = _DOUBAO_LITE_MODELS | _DOUBAO_PRO_MODELS
     _semaphore_lock = Lock()
     _model_semaphores: Dict[str, Semaphore] = {}
     _qps_lock = Lock()
@@ -18,17 +21,19 @@ class SparkClient:
     def __init__(self, config_path: str, model: str = "4.0Ultra", timeout: Tuple[int, int] | None = None):
         self.model = model
         model_key = str(self.model or "").strip().lower()
+        lite_like = ("lite" in model_key) or (model_key in self._DOUBAO_LITE_MODELS)
         connect_timeout = self._resolve_int_env(model_key, "CONNECT_TIMEOUT", "10")
         read_timeout = self._resolve_int_env(model_key, "READ_TIMEOUT", "240")
         self.timeout = timeout or (connect_timeout, read_timeout)
-        default_retries = "4" if model_key in {"lite", "sparklite", "4.0lite"} else "2"
+        default_retries = "5" if lite_like else "2"
         self.max_retries = max(0, self._resolve_int_env(model_key, "MAX_RETRIES", default_retries))
-        self.retry_interval = max(0.0, self._resolve_float_env(model_key, "RETRY_INTERVAL", "1.0"))
-        default_parallel = "2" if model_key in {"lite", "sparklite", "4.0lite"} else "5"
+        default_retry_interval = "1.2" if lite_like else "1.0"
+        self.retry_interval = max(0.0, self._resolve_float_env(model_key, "RETRY_INTERVAL", default_retry_interval))
+        default_parallel = "1" if model_key in self._DOUBAO_LITE_MODELS else ("2" if lite_like else "5")
         self.max_parallel = max(1, self._resolve_int_env(model_key, "MAX_PARALLEL", default_parallel))
-        default_qps = "1.0" if model_key in {"lite", "sparklite", "4.0lite"} else "3.0"
+        default_qps = "0.5" if model_key in self._DOUBAO_LITE_MODELS else ("1.0" if lite_like else "3.0")
         self.max_qps = max(0.1, self._resolve_float_env(model_key, "MAX_QPS", default_qps))
-        default_stream = "1" if model_key in {"lite", "sparklite", "4.0lite"} else "0"
+        default_stream = "1" if lite_like else "0"
         self.enable_stream = self._resolve_int_env(model_key, "STREAM", default_stream) > 0
         self.acquire_timeout = max(1, self._resolve_int_env(model_key, "ACQUIRE_TIMEOUT", "300"))
         self.url, self.authorization = self._load_config(config_path)
@@ -51,8 +56,10 @@ class SparkClient:
     @classmethod
     def _resolve_int_env(cls, model_key: str, suffix: str, default: str) -> int:
         shared = os.getenv(f"SPARK_{suffix}")
-        if model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
-            value = os.getenv(f"DOUBAO_{suffix}") or shared or default
+        if model_key in cls._DOUBAO_LITE_MODELS:
+            value = os.getenv(f"DOUBAO_LITE_{suffix}") or os.getenv(f"DOUBAO_{suffix}") or shared or default
+        elif model_key in cls._DOUBAO_PRO_MODELS:
+            value = os.getenv(f"DOUBAO_PRO_{suffix}") or os.getenv(f"DOUBAO_{suffix}") or shared or default
         elif model_key in {"lite", "sparklite", "4.0lite"}:
             value = os.getenv(f"SPARK_LITE_{suffix}") or shared or default
         else:
@@ -62,8 +69,10 @@ class SparkClient:
     @classmethod
     def _resolve_float_env(cls, model_key: str, suffix: str, default: str) -> float:
         shared = os.getenv(f"SPARK_{suffix}")
-        if model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
-            value = os.getenv(f"DOUBAO_{suffix}") or shared or default
+        if model_key in cls._DOUBAO_LITE_MODELS:
+            value = os.getenv(f"DOUBAO_LITE_{suffix}") or os.getenv(f"DOUBAO_{suffix}") or shared or default
+        elif model_key in cls._DOUBAO_PRO_MODELS:
+            value = os.getenv(f"DOUBAO_PRO_{suffix}") or os.getenv(f"DOUBAO_{suffix}") or shared or default
         elif model_key in {"lite", "sparklite", "4.0lite"}:
             value = os.getenv(f"SPARK_LITE_{suffix}") or shared or default
         else:
@@ -91,9 +100,22 @@ class SparkClient:
         if model_key in {"lite", "sparklite", "4.0lite"}:
             env_url = os.getenv("SPARK_LITE_API_URL") or os.getenv("SPARK_API_URL")
             env_auth = os.getenv("SPARK_LITE_API_AUTH") or os.getenv("SPARK_API_AUTH")
-        elif model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
-            env_url = os.getenv("DOUBAO_API_URL")
-            env_auth = os.getenv("DOUBAO_API_AUTH") or os.getenv("DOUBAO_API_KEY")
+        elif model_key in self._DOUBAO_LITE_MODELS:
+            env_url = os.getenv("DOUBAO_LITE_API_URL") or os.getenv("DOUBAO_API_URL")
+            env_auth = (
+                os.getenv("DOUBAO_LITE_API_AUTH")
+                or os.getenv("DOUBAO_LITE_API_KEY")
+                or os.getenv("DOUBAO_API_AUTH")
+                or os.getenv("DOUBAO_API_KEY")
+            )
+        elif model_key in self._DOUBAO_PRO_MODELS:
+            env_url = os.getenv("DOUBAO_PRO_API_URL") or os.getenv("DOUBAO_API_URL")
+            env_auth = (
+                os.getenv("DOUBAO_PRO_API_AUTH")
+                or os.getenv("DOUBAO_PRO_API_KEY")
+                or os.getenv("DOUBAO_API_AUTH")
+                or os.getenv("DOUBAO_API_KEY")
+            )
         else:
             env_url = os.getenv("SPARK_ULTRA_API_URL") or os.getenv("SPARK_API_URL")
             env_auth = os.getenv("SPARK_ULTRA_API_AUTH") or os.getenv("SPARK_API_AUTH")
@@ -125,7 +147,7 @@ class SparkClient:
     def _request_url(self) -> str:
         model_key = str(self.model or "").strip().lower()
         base_url = str(self.url or "").strip().rstrip("/")
-        if model_key in {"doubao", "seed2.0pro", "seed2", "doubao-seed-2-0-pro-260215"}:
+        if model_key in self._DOUBAO_MODELS:
             if base_url.endswith("/chat/completions") or base_url.endswith("/responses"):
                 return base_url
             if base_url.endswith("/api/v3"):
@@ -213,6 +235,52 @@ class SparkClient:
         message = str(err.get("message", "")).strip()
         return code == "11202" or "AppIdQpsOverFlowError" in message
 
+    @staticmethod
+    def _retry_after_seconds(resp: requests.Response) -> float:
+        raw = str(resp.headers.get("Retry-After", "")).strip()
+        if not raw:
+            return 0.0
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            return 0.0
+
+    @staticmethod
+    def _is_retryable_overload_response(resp: requests.Response) -> bool:
+        if resp.status_code not in {429, 503}:
+            return False
+        text = (resp.text or "").strip()
+        if "ServerOverloaded" in text or "TooManyRequests" in text:
+            return True
+        try:
+            payload = resp.json()
+        except ValueError:
+            return resp.status_code in {429, 503}
+        if not isinstance(payload, dict):
+            return resp.status_code in {429, 503}
+        err = payload.get("error", {})
+        if not isinstance(err, dict):
+            return resp.status_code in {429, 503}
+        code = str(err.get("code", "")).strip()
+        err_type = str(err.get("type", "")).strip()
+        message = str(err.get("message", "")).strip()
+        return code in {"ServerOverloaded", "TooManyRequests"} or err_type == "TooManyRequests" or "overload" in message.lower()
+
+    def _looks_like_html_response(self, resp: requests.Response) -> bool:
+        content_type = str(resp.headers.get("Content-Type", "")).lower()
+        if "text/html" in content_type:
+            return True
+        sample = (resp.text or "").lstrip()[:256].lower()
+        return sample.startswith("<!doctype html") or sample.startswith("<html")
+
+    def _build_non_json_error(self, resp: requests.Response) -> RuntimeError:
+        preview = (resp.text or "").replace("\n", " ").replace("\r", " ").strip()[:200]
+        hint = "模型服务返回非JSON内容"
+        model_key = str(self.model or "").strip().lower()
+        if model_key in self._DOUBAO_MODELS:
+            hint += f"（请检查 DOUBAO_API_URL / DOUBAO_LITE_API_URL 配置是否为豆包 API 地址）"
+        return RuntimeError(f"{hint}: HTTP {resp.status_code}, URL={self._request_url()}, 响应片段={preview}")
+
     def _read_stream_content(self, resp: requests.Response) -> str:
         chunks: List[str] = []
         latest_message = ""
@@ -229,6 +297,8 @@ class SparkClient:
                 line = line[5:].strip()
             if line == "[DONE]":
                 break
+            if line.lower().startswith("<!doctype html") or line.lower().startswith("<html"):
+                raise self._build_non_json_error(resp)
             if not line:
                 continue
             try:
@@ -291,6 +361,13 @@ class SparkClient:
                         backoff = self.retry_interval * (2**attempt) + random.uniform(0.0, 0.3)
                         time.sleep(backoff)
                         continue
+                    if self._is_retryable_overload_response(resp):
+                        if attempt >= self.max_retries:
+                            raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
+                        retry_after = self._retry_after_seconds(resp)
+                        backoff = max(retry_after, self.retry_interval * (2**attempt) + random.uniform(0.0, 0.6))
+                        time.sleep(backoff)
+                        continue
                     break
                 except requests.exceptions.Timeout as exc:
                     if attempt >= self.max_retries:
@@ -308,12 +385,17 @@ class SparkClient:
             try:
                 if resp.status_code >= 400:
                     raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
+                if self._looks_like_html_response(resp):
+                    raise self._build_non_json_error(resp)
                 if body["stream"]:
                     content = self._read_stream_content(resp)
                     if not content:
                         raise RuntimeError("模型流式返回内容为空，请稍后重试。")
                     return content
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError as exc:
+                    raise self._build_non_json_error(resp) from exc
                 content = self._extract_content(data)
                 if not content:
                     raise RuntimeError(f"模型返回内容为空: {json.dumps(data, ensure_ascii=False)}")
