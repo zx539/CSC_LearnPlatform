@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import time
 from threading import Lock, Semaphore
 from pathlib import Path
@@ -11,6 +12,8 @@ import requests
 class SparkClient:
     _semaphore_lock = Lock()
     _model_semaphores: Dict[str, Semaphore] = {}
+    _qps_lock = Lock()
+    _model_next_allowed_ts: Dict[str, float] = {}
 
     def __init__(self, config_path: str, model: str = "4.0Ultra", timeout: Tuple[int, int] | None = None):
         self.model = model
@@ -18,11 +21,18 @@ class SparkClient:
         connect_timeout = self._resolve_int_env(model_key, "CONNECT_TIMEOUT", "10")
         read_timeout = self._resolve_int_env(model_key, "READ_TIMEOUT", "240")
         self.timeout = timeout or (connect_timeout, read_timeout)
-        self.max_retries = max(0, self._resolve_int_env(model_key, "MAX_RETRIES", "2"))
+        default_retries = "4" if model_key in {"lite", "sparklite", "4.0lite"} else "2"
+        self.max_retries = max(0, self._resolve_int_env(model_key, "MAX_RETRIES", default_retries))
         self.retry_interval = max(0.0, self._resolve_float_env(model_key, "RETRY_INTERVAL", "1.0"))
-        self.max_parallel = max(1, self._resolve_int_env(model_key, "MAX_PARALLEL", "5"))
+        default_parallel = "2" if model_key in {"lite", "sparklite", "4.0lite"} else "5"
+        self.max_parallel = max(1, self._resolve_int_env(model_key, "MAX_PARALLEL", default_parallel))
+        default_qps = "1.0" if model_key in {"lite", "sparklite", "4.0lite"} else "3.0"
+        self.max_qps = max(0.1, self._resolve_float_env(model_key, "MAX_QPS", default_qps))
+        default_stream = "1" if model_key in {"lite", "sparklite", "4.0lite"} else "0"
+        self.enable_stream = self._resolve_int_env(model_key, "STREAM", default_stream) > 0
         self.acquire_timeout = max(1, self._resolve_int_env(model_key, "ACQUIRE_TIMEOUT", "300"))
         self.url, self.authorization = self._load_config(config_path)
+        self.session = requests.Session()
 
     @staticmethod
     def _safe_int(value: str, default: int) -> int:
@@ -152,6 +162,11 @@ class SparkClient:
                 text = self._extract_message_content(message)
                 if text:
                     return text
+            delta = choice.get("delta", {})
+            if isinstance(delta, dict):
+                text = self._extract_message_content(delta)
+                if text:
+                    return text
             # 兼容部分 lite 返回: choices[0].text
             text = str(choice.get("text", "")).strip()
             if text:
@@ -164,12 +179,69 @@ class SparkClient:
                 return output_text
         return ""
 
+    def _wait_for_qps_slot(self):
+        model_key = str(self.model or "").strip().lower() or "default"
+        interval = 1.0 / max(self.max_qps, 0.1)
+        sleep_seconds = 0.0
+        with self._qps_lock:
+            now = time.monotonic()
+            next_allowed = self._model_next_allowed_ts.get(model_key, now)
+            if next_allowed > now:
+                sleep_seconds = next_allowed - now
+            scheduled_at = max(now, next_allowed) + interval
+            self._model_next_allowed_ts[model_key] = scheduled_at
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
+    @staticmethod
+    def _is_qps_overflow_response(resp: requests.Response) -> bool:
+        if resp.status_code < 400:
+            return False
+        text = (resp.text or "").strip()
+        if "AppIdQpsOverFlowError" in text:
+            return True
+        try:
+            payload = resp.json()
+        except ValueError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        err = payload.get("error", {})
+        if not isinstance(err, dict):
+            return False
+        code = str(err.get("code", "")).strip()
+        message = str(err.get("message", "")).strip()
+        return code == "11202" or "AppIdQpsOverFlowError" in message
+
+    def _read_stream_content(self, resp: requests.Response) -> str:
+        chunks: List[str] = []
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if raw_line is None:
+                continue
+            line = str(raw_line).strip()
+            if not line:
+                continue
+            if line.startswith("data:"):
+                line = line[5:].strip()
+            if line == "[DONE]":
+                break
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            text = self._extract_content(payload)
+            if text:
+                chunks.append(text)
+        return "".join(chunks).strip()
+
     def chat(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
         headers = {"Authorization": self.authorization, "content-type": "application/json"}
         body = {
             "model": self.model,
             "user": "software_cup_user",
-            "stream": False,
+            "stream": self.enable_stream,
             "temperature": temperature,
             "messages": messages,
         }
@@ -181,7 +253,20 @@ class SparkClient:
         try:
             for attempt in range(self.max_retries + 1):
                 try:
-                    resp = requests.post(self._request_url(), json=body, headers=headers, timeout=self.timeout)
+                    self._wait_for_qps_slot()
+                    resp = self.session.post(
+                        self._request_url(),
+                        json=body,
+                        headers=headers,
+                        timeout=self.timeout,
+                        stream=body["stream"],
+                    )
+                    if self._is_qps_overflow_response(resp):
+                        if attempt >= self.max_retries:
+                            raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
+                        backoff = self.retry_interval * (2**attempt) + random.uniform(0.0, 0.3)
+                        time.sleep(backoff)
+                        continue
                     break
                 except requests.exceptions.Timeout as exc:
                     if attempt >= self.max_retries:
@@ -196,13 +281,20 @@ class SparkClient:
                     time.sleep(self.retry_interval)
             if resp is None:
                 raise RuntimeError("模型请求未发出，请重试。")
-            if resp.status_code >= 400:
-                raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
-
-            data = resp.json()
-            content = self._extract_content(data)
-            if not content:
-                raise RuntimeError(f"模型返回内容为空: {json.dumps(data, ensure_ascii=False)}")
-            return content
+            try:
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
+                if body["stream"]:
+                    content = self._read_stream_content(resp)
+                    if not content:
+                        raise RuntimeError("模型流式返回内容为空，请稍后重试。")
+                    return content
+                data = resp.json()
+                content = self._extract_content(data)
+                if not content:
+                    raise RuntimeError(f"模型返回内容为空: {json.dumps(data, ensure_ascii=False)}")
+                return content
+            finally:
+                resp.close()
         finally:
             sem.release()

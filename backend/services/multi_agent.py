@@ -46,8 +46,16 @@ class MultiAgentLearningSystem:
         self.kb_dir = Path(kb_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.resource_max_parallel = max(1, min(6, self._safe_int(os.getenv("RESOURCE_MAX_PARALLEL", "3"), 3)))
-        self.form_max_parallel = max(1, min(2, self._safe_int(os.getenv("FORM_MAX_PARALLEL", "2"), 2)))
+        default_resource_parallel = "2" if self._is_lite_model(getattr(self.spark, "model", "")) else "3"
+        default_form_parallel = "1" if self._is_lite_model(getattr(self.spark, "model", "")) else "2"
+        self.resource_max_parallel = max(
+            1,
+            min(6, self._safe_int(os.getenv("RESOURCE_MAX_PARALLEL", default_resource_parallel), int(default_resource_parallel))),
+        )
+        self.form_max_parallel = max(
+            1,
+            min(2, self._safe_int(os.getenv("FORM_MAX_PARALLEL", default_form_parallel), int(default_form_parallel))),
+        )
 
     def _read_knowledge_base(self, course: str) -> str:
         if not self.kb_dir.exists():
