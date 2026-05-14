@@ -192,6 +192,64 @@ async function readApiResponse(resp) {
   throw new Error(`接口返回非JSON响应（HTTP ${resp.status}）：${preview || "empty body"}`);
 }
 
+function createAbortError() {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+async function sleepWithSignal(ms, signal) {
+  if (!ms || ms <= 0) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      reject(createAbortError());
+    };
+    if (!signal) return;
+    if (signal.aborted) {
+      clearTimeout(timer);
+      reject(createAbortError());
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function waitGenerateTask(taskId, signal) {
+  let pollCount = 0;
+  while (true) {
+    if (signal?.aborted) throw createAbortError();
+    const resp = await fetch(`/api/generate/${encodeURIComponent(taskId)}`, { method: "GET", signal });
+    const result = await readApiResponse(resp);
+    if (!resp.ok) throw new Error(result.error || "查询生成任务失败");
+    const status = String(result.status || "").trim().toLowerCase();
+    const message = String(result.message || "").trim();
+    if (status === "queued" || status === "running") {
+      setStatus(message || "学习方案生成中，请稍候...");
+      const waitMs = Math.min(5000, 1200 + pollCount * 250);
+      pollCount += 1;
+      await sleepWithSignal(waitMs, signal);
+      continue;
+    }
+    if (status === "succeeded") {
+      const payload = result.result;
+      if (!payload || typeof payload !== "object") {
+        throw new Error("生成任务已完成，但结果为空");
+      }
+      return payload;
+    }
+    if (status === "failed") {
+      throw new Error(result.error || "生成失败");
+    }
+    throw new Error(`未知任务状态：${status || "empty"}`);
+  }
+}
+
 function configureMarkdownRenderer() {
   if (!window.marked) return;
   marked.setOptions({
@@ -1314,20 +1372,23 @@ async function generate() {
   const data = await withLoading(
     "正在请求 AI 大模型生成学习画像与学习方案...",
     async (signal) => {
-      const resp = await fetch("/api/generate", {
+      const submitResp = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         signal,
       });
-      const result = await readApiResponse(resp);
-      if (!resp.ok) throw new Error(result.error || "生成失败");
-      return result;
+      const submitResult = await readApiResponse(submitResp);
+      if (!submitResp.ok) throw new Error(submitResult.error || "创建生成任务失败");
+      const taskId = String(submitResult.task_id || "").trim();
+      if (!taskId) throw new Error("创建任务成功但未返回任务ID");
+      setStatus("任务已提交，正在后台生成学习方案...");
+      return await waitGenerateTask(taskId, signal);
     },
     { cancellable: true },
   ).catch((err) => {
     if (err?.name === "AbortError") {
-      setStatus("已取消本次模型请求。");
+      setStatus("已停止等待生成结果。后台任务仍在执行，可稍后在“已有学习项目”中查看。");
       return null;
     }
     setStatus(`错误：${err.message}`);

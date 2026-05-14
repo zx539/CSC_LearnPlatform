@@ -1,7 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import json
 import os
 from pathlib import Path
 import re
+from threading import Lock
+import time
+from uuid import uuid4
 
 from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 from requests import RequestException
@@ -28,6 +33,144 @@ USER_DATA_DIR = Path(os.getenv("USER_DATA_DIR", "")).expanduser() if os.getenv("
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 app.secret_key = os.getenv("APP_SECRET_KEY", "software-cup-spark-secret")
 user_store = UserStore(str(USER_DATA_DIR), legacy_dir=str(LEGACY_USERS_DIR))
+generate_executor = ThreadPoolExecutor(max_workers=max(1, int(os.getenv("GENERATE_TASK_WORKERS", "2"))))
+generate_tasks_lock = Lock()
+generate_tasks: dict[str, dict] = {}
+generate_task_ttl_seconds = max(300, int(os.getenv("GENERATE_TASK_TTL_SECONDS", "86400")))
+generate_task_dir = USER_DATA_DIR / "_async_tasks"
+generate_task_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _utc_now_iso() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cleanup_generate_tasks():
+    now_ts = time.time()
+    with generate_tasks_lock:
+        expired_ids = [
+            task_id
+            for task_id, task in generate_tasks.items()
+            if task.get("status") in {"succeeded", "failed"}
+            and now_ts - float(task.get("updated_ts", now_ts)) > generate_task_ttl_seconds
+        ]
+        for task_id in expired_ids:
+            generate_tasks.pop(task_id, None)
+    for task_file in generate_task_dir.glob("*.json"):
+        try:
+            payload = json.loads(task_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        status = str(payload.get("status", "")).strip().lower()
+        updated_ts = float(payload.get("updated_ts", now_ts))
+        if status in {"succeeded", "failed"} and now_ts - updated_ts > generate_task_ttl_seconds:
+            try:
+                task_file.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
+def _generate_task_path(task_id: str) -> Path:
+    safe_task_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(task_id or ""))
+    return generate_task_dir / f"{safe_task_id}.json"
+
+
+def _save_generate_task_to_file(task: dict):
+    task_id = str(task.get("task_id", "")).strip()
+    if not task_id:
+        return
+    path = _generate_task_path(task_id)
+    tmp_path = path.with_suffix(".tmp")
+    text = json.dumps(task, ensure_ascii=False, indent=2)
+    tmp_path.write_text(text, encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _load_generate_task_from_file(task_id: str) -> dict | None:
+    path = _generate_task_path(task_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _set_generate_task(task_id: str, **updates) -> dict | None:
+    now_ts = time.time()
+    with generate_tasks_lock:
+        task = generate_tasks.get(task_id)
+        if not isinstance(task, dict):
+            task = _load_generate_task_from_file(task_id)
+            if isinstance(task, dict):
+                generate_tasks[task_id] = task
+        if not isinstance(task, dict):
+            return None
+        task.update(updates)
+        task["updated_at"] = _utc_now_iso()
+        task["updated_ts"] = now_ts
+        snapshot = dict(task)
+    _save_generate_task_to_file(snapshot)
+    return snapshot
+
+
+def _public_generate_task_payload(task: dict) -> dict:
+    payload = {
+        "task_id": task.get("task_id", ""),
+        "status": task.get("status", "unknown"),
+        "message": task.get("message", ""),
+        "created_at": task.get("created_at", ""),
+        "updated_at": task.get("updated_at", ""),
+    }
+    if task.get("status") == "succeeded":
+        payload["result"] = task.get("result", {})
+    elif task.get("status") == "failed":
+        payload["error"] = task.get("error", "任务失败")
+    return payload
+
+
+def _run_generate_task(
+    task_id: str,
+    username: str,
+    payload: dict,
+    course: str,
+    topic: str,
+    dialogue: str,
+    progress: str,
+    model: str,
+    run_name: str,
+):
+    _set_generate_task(task_id, status="running", message="任务已开始，正在生成学习画像与学习资源...")
+    try:
+        system = create_system(model=model)
+        report = system.run(dialogue=dialogue, course=course, topic=topic, progress=progress)
+        output_path, report_markdown = system.save_report(report, run_name)
+        user_store.save_run(
+            username=username,
+            run_name=run_name,
+            request_payload=payload,
+            report=report,
+            output_dir=str(output_path),
+            report_markdown=report_markdown,
+        )
+        _set_generate_task(
+            task_id,
+            status="succeeded",
+            message="生成完成",
+            result={
+                "run_name": run_name,
+                "output_dir": str(output_path),
+                "report": report,
+                "report_markdown": report_markdown,
+            },
+        )
+    except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
+        _set_generate_task(task_id, status="failed", message="生成失败", error=str(exc))
+    except Exception as exc:
+        _set_generate_task(task_id, status="failed", message="生成失败", error=f"{type(exc).__name__}: {exc}")
 
 
 def normalize_model(model: str) -> str:
@@ -242,29 +385,60 @@ def generate():
         return jsonify({"error": "course、topic、dialogue 为必填项"}), 400
 
     run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
-    try:
-        system = create_system(model=model)
-        report = system.run(dialogue=dialogue, course=course, topic=topic, progress=progress)
-        output_path, report_markdown = system.save_report(report, run_name)
-        user_store.save_run(
-            username=username,
-            run_name=run_name,
-            request_payload=payload,
-            report=report,
-            output_dir=str(output_path),
-            report_markdown=report_markdown,
-        )
-    except (FileNotFoundError, ValueError, RuntimeError, RequestException) as exc:
-        return jsonify({"error": str(exc)}), 500
-
-    return jsonify(
-        {
-            "run_name": run_name,
-            "output_dir": str(output_path),
-            "report": report,
-            "report_markdown": report_markdown,
+    task_id = uuid4().hex
+    now_iso = _utc_now_iso()
+    now_ts = time.time()
+    with generate_tasks_lock:
+        generate_tasks[task_id] = {
+            "task_id": task_id,
+            "username": username,
+            "status": "queued",
+            "message": "任务已提交，等待执行",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "created_ts": now_ts,
+            "updated_ts": now_ts,
+            "result": None,
+            "error": "",
         }
+        task_snapshot = dict(generate_tasks[task_id])
+    _save_generate_task_to_file(task_snapshot)
+    generate_executor.submit(
+        _run_generate_task,
+        task_id,
+        username,
+        payload,
+        course,
+        topic,
+        dialogue,
+        progress,
+        model,
+        run_name,
     )
+    _cleanup_generate_tasks()
+    return jsonify({"task_id": task_id, "status": "queued", "message": "任务已提交，请轮询任务状态"})
+
+
+@app.get("/api/generate/<task_id>")
+def get_generate_task(task_id: str):
+    username, err = require_login_json()
+    if err:
+        return err
+
+    with generate_tasks_lock:
+        task = generate_tasks.get(task_id)
+        task_copy = dict(task) if isinstance(task, dict) else None
+    if not isinstance(task_copy, dict):
+        task_copy = _load_generate_task_from_file(task_id)
+        if isinstance(task_copy, dict):
+            with generate_tasks_lock:
+                generate_tasks[task_id] = dict(task_copy)
+    if not isinstance(task_copy, dict):
+        return jsonify({"error": "任务不存在或已过期"}), 404
+    if str(task_copy.get("username", "")) != username:
+        return jsonify({"error": "无权访问该任务"}), 403
+    _cleanup_generate_tasks()
+    return jsonify(_public_generate_task_payload(task_copy))
 
 
 @app.post("/api/tutor")
