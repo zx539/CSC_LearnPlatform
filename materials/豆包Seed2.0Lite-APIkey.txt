@@ -1,2 +1,2 @@
-APIkey:ark-e37fc36a-73d6-411e-8a23-cc920900856a-343c0
+APIkey:apikey-20260514222514-g8vwv
 接口地址：https://ark.cn-beijing.volces.com/api/v3

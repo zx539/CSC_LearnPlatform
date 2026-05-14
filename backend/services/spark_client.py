@@ -21,17 +21,18 @@ class SparkClient:
     def __init__(self, config_path: str, model: str = "4.0Ultra", timeout: Tuple[int, int] | None = None):
         self.model = model
         model_key = str(self.model or "").strip().lower()
+        doubao_like = model_key in self._DOUBAO_MODELS
         lite_like = ("lite" in model_key) or (model_key in self._DOUBAO_LITE_MODELS)
         connect_timeout = self._resolve_int_env(model_key, "CONNECT_TIMEOUT", "10")
         read_timeout = self._resolve_int_env(model_key, "READ_TIMEOUT", "240")
         self.timeout = timeout or (connect_timeout, read_timeout)
-        default_retries = "5" if lite_like else "2"
+        default_retries = "6" if doubao_like else ("5" if lite_like else "2")
         self.max_retries = max(0, self._resolve_int_env(model_key, "MAX_RETRIES", default_retries))
-        default_retry_interval = "1.2" if lite_like else "1.0"
+        default_retry_interval = "1.5" if doubao_like else ("1.2" if lite_like else "1.0")
         self.retry_interval = max(0.0, self._resolve_float_env(model_key, "RETRY_INTERVAL", default_retry_interval))
-        default_parallel = "1" if model_key in self._DOUBAO_LITE_MODELS else ("2" if lite_like else "5")
+        default_parallel = "1" if doubao_like else ("2" if lite_like else "5")
         self.max_parallel = max(1, self._resolve_int_env(model_key, "MAX_PARALLEL", default_parallel))
-        default_qps = "0.5" if model_key in self._DOUBAO_LITE_MODELS else ("1.0" if lite_like else "3.0")
+        default_qps = "0.4" if doubao_like else ("1.0" if lite_like else "3.0")
         self.max_qps = max(0.1, self._resolve_float_env(model_key, "MAX_QPS", default_qps))
         default_stream = "1" if lite_like else "0"
         self.enable_stream = self._resolve_int_env(model_key, "STREAM", default_stream) > 0
@@ -95,6 +96,13 @@ class SparkClient:
         value = value.split(":", 1)[1].strip() if value.lower().startswith("apikey:") else value
         return value
 
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        normalized = str(url or "").strip()
+        if normalized.startswith("//"):
+            return f"https:{normalized}"
+        return normalized
+
     def _load_config(self, config_path: str) -> Tuple[str, str]:
         model_key = str(self.model or "").strip().lower()
         if model_key in {"lite", "sparklite", "4.0lite"}:
@@ -121,7 +129,7 @@ class SparkClient:
             env_auth = os.getenv("SPARK_ULTRA_API_AUTH") or os.getenv("SPARK_API_AUTH")
         if env_url and env_auth:
             auth = env_auth if env_auth.lower().startswith("bearer ") else f"Bearer {env_auth}"
-            return env_url.strip(), auth.strip()
+            return self._normalize_url(env_url), auth.strip()
 
         path = Path(config_path)
         if not path.exists():
@@ -142,7 +150,7 @@ class SparkClient:
             raise ValueError("配置文件缺少接口地址或APIkey")
         if not auth.lower().startswith("bearer "):
             auth = f"Bearer {auth}"
-        return url, auth
+        return self._normalize_url(url), auth
 
     def _request_url(self) -> str:
         model_key = str(self.model or "").strip().lower()
@@ -383,6 +391,7 @@ class SparkClient:
                         if attempt >= self.max_retries:
                             raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
                         backoff = self.retry_interval * (2**attempt) + random.uniform(0.0, 0.3)
+                        resp.close()
                         time.sleep(backoff)
                         continue
                     if self._is_retryable_overload_response(resp):
@@ -392,6 +401,7 @@ class SparkClient:
                             raise RuntimeError(f"请求失败: HTTP {resp.status_code}, {resp.text}")
                         retry_after = self._retry_after_seconds(resp)
                         backoff = max(retry_after, self.retry_interval * (2**attempt) + random.uniform(0.0, 0.6))
+                        resp.close()
                         time.sleep(backoff)
                         continue
                     break
