@@ -216,10 +216,13 @@ class SparkClient:
     def _read_stream_content(self, resp: requests.Response) -> str:
         chunks: List[str] = []
         latest_message = ""
-        for raw_line in resp.iter_lines(decode_unicode=True):
+        for raw_line in resp.iter_lines(decode_unicode=False):
             if raw_line is None:
                 continue
-            line = str(raw_line).strip()
+            if isinstance(raw_line, bytes):
+                line = raw_line.decode("utf-8", errors="replace").strip()
+            else:
+                line = str(raw_line).strip()
             if not line:
                 continue
             if line.startswith("data:"):
@@ -250,9 +253,12 @@ class SparkClient:
             text = str(choice.get("text", "")).strip()
             if text:
                 chunks.append(text)
-        if chunks:
-            return "".join(chunks).strip()
-        return latest_message.strip()
+        assembled = "".join(chunks).strip()
+        latest = latest_message.strip()
+        if assembled and latest:
+            # 两种模式并存时，优先更完整的文本（通常是累计全文）
+            return latest if len(latest) >= len(assembled) else assembled
+        return assembled or latest
 
     def chat(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
         headers = {"Authorization": self.authorization, "content-type": "application/json"}

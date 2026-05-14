@@ -241,6 +241,33 @@ function normalizeMarkdownForRender(rawText) {
   };
 
   let normalized = raw;
+  const decodeEscapedMarkdown = (text) => {
+    let body = String(text || "").trim();
+    if (!body) return body;
+    const quoted = body.match(/^"(.*)"$/s);
+    if (quoted) {
+      try {
+        const parsed = JSON.parse(body);
+        if (typeof parsed === "string" && parsed.trim()) {
+          body = parsed.trim();
+        }
+      } catch (_) {
+        // ignore and keep original
+      }
+    }
+    const hasEscapedMarkdown =
+      /\\n\s*(#{1,6}\s|[-*+]\s|\d+\.\s|```|>\s)/.test(body) ||
+      (body.includes("\\n") && body.split("\n").length <= 2);
+    if (!hasEscapedMarkdown) return body;
+    let decoded = body
+      .replace(/\\r\\n/g, "\n")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, "\"");
+    decoded = decoded.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    return decoded.trim();
+  };
+  normalized = decodeEscapedMarkdown(normalized);
   const looksLikeMathBlock = (text) => {
     const body = String(text || "").trim();
     if (!body) return false;

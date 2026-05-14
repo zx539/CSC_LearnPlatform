@@ -18,8 +18,12 @@ def extract_json_block(text: str) -> Dict:
     fenced = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", body, flags=re.IGNORECASE)
     if fenced:
         candidates.insert(0, _stringify(fenced.group(1)).strip())
+    # 兼容不完整代码围栏：```json{... 或 {...}```
+    candidates.append(re.sub(r"^\s*```(?:json)?\s*", "", body, flags=re.IGNORECASE).strip())
+    candidates.append(re.sub(r"\s*```\s*$", "", body).strip())
 
     for candidate in candidates:
+        candidate = candidate.lstrip("\ufeff").strip()
         if not candidate:
             continue
         try:
@@ -81,6 +85,27 @@ class MultiAgentLearningSystem:
             1,
             min(2, self._safe_int(os.getenv("FORM_MAX_PARALLEL", default_form_parallel), int(default_form_parallel))),
         )
+
+    def _chat_json(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> Dict:
+        raw = self.spark.chat(messages, temperature=temperature)
+        try:
+            return extract_json_block(raw)
+        except ValueError as first_exc:
+            strict_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "你上一次输出不是合法JSON。"
+                        "现在必须只输出一个严格JSON对象："
+                        "不要```代码块，不要解释文字，不要前后缀。"
+                    ),
+                }
+            ] + messages
+            retry_raw = self.spark.chat(strict_messages, temperature=0.0)
+            try:
+                return extract_json_block(retry_raw)
+            except ValueError as second_exc:
+                raise ValueError(f"{first_exc}；重试后仍未得到合法JSON。") from second_exc
 
     def _read_knowledge_base(self, course: str) -> str:
         if not self.kb_dir.exists():
@@ -269,11 +294,10 @@ class MultiAgentLearningSystem:
                 "next_questions": [],
             },
         }
-        raw = self.spark.chat(
+        parsed = self._chat_json(
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
             temperature=0.2,
         )
-        parsed = extract_json_block(raw)
         return self._normalize_profile_payload(
             payload=parsed,
             dialogue=dialogue,
@@ -326,6 +350,28 @@ class MultiAgentLearningSystem:
         text = re.sub(r"\\\[\s*([\s\S]*?)\s*\\\]", lambda m: f"$$\n{m.group(1).strip()}\n$$", text)
         text = re.sub(r"\\\(\s*([\s\S]*?)\s*\\\)", lambda m: f"${m.group(1).strip()}$", text)
         return text
+
+    @staticmethod
+    def _decode_escaped_markdown(content: str) -> str:
+        text = _stringify(content).strip()
+        if not text:
+            return text
+        quoted = re.match(r'^"([\s\S]*)"$', text)
+        if quoted:
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, str) and parsed.strip():
+                    text = parsed.strip()
+            except json.JSONDecodeError:
+                pass
+        has_escaped_md = bool(
+            re.search(r"\\n\s*(#{1,6}\s|[-*+]\s|\d+\.\s|```\s*|>\s)", text) or ("\\n" in text and text.count("\n") <= 1)
+        )
+        if not has_escaped_md:
+            return text
+        decoded = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"')
+        decoded = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), decoded)
+        return decoded.strip()
 
     @staticmethod
     def _looks_like_markdown(text: str) -> bool:
@@ -639,8 +685,10 @@ class MultiAgentLearningSystem:
             for future in as_completed(future_to_resource):
                 item = future_to_resource[future]
                 raw = future.result()
-                normalized = self._strip_leading_json_noise(raw)
+                normalized = self._decode_escaped_markdown(raw)
+                normalized = self._strip_leading_json_noise(normalized)
                 normalized = self._unwrap_markdown_fence(normalized)
+                normalized = self._decode_escaped_markdown(normalized)
                 normalized = self._normalize_math_markdown(normalized)
                 if item == self.MERMAID_RESOURCE_TYPE:
                     normalized = self._normalize_mermaid_markdown(normalized)
@@ -775,11 +823,10 @@ class MultiAgentLearningSystem:
                 "rule": "每完成一次阶段测试并提交后，系统生成下一阶段问卷。",
             },
         }
-        raw = self.spark.chat(
+        parsed = self._chat_json(
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
             temperature=0.3,
         )
-        parsed = extract_json_block(raw)
         questions = parsed.get("questions", [])
         normalized: List[Dict[str, Any]] = []
         if isinstance(questions, list):
@@ -896,11 +943,10 @@ class MultiAgentLearningSystem:
                 "rule": "测试问卷可选填；仅在提交测试问卷后才更新下一次学习进度调查问卷。",
             },
         }
-        raw = self.spark.chat(
+        parsed = self._chat_json(
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
             temperature=0.3,
         )
-        parsed = extract_json_block(raw)
         questions = parsed.get("questions", [])
         normalized: List[Dict[str, Any]] = []
         if isinstance(questions, list):
@@ -967,11 +1013,10 @@ class MultiAgentLearningSystem:
                 "push_strategy": {"daily_push_rules": [], "adaptive_rules": []},
             },
         }
-        raw = self.spark.chat(
+        return self._chat_json(
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
             temperature=0.3,
         )
-        return extract_json_block(raw)
 
     def tutor(self, question: str, profile: Dict, topic: str, memory: List[Dict[str, str]] | None = None) -> str:
         system = (
@@ -1029,11 +1074,10 @@ class MultiAgentLearningSystem:
                 "next_week_targets": [],
             },
         }
-        raw = self.spark.chat(
+        parsed = self._chat_json(
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user, ensure_ascii=False)}],
             temperature=0.2,
         )
-        parsed = extract_json_block(raw)
         return self._normalize_evaluation_payload(parsed, progress_payload=progress_payload, path=path)
 
     def _normalize_evaluation_payload(self, payload: Dict[str, Any], progress_payload: Dict[str, Any], path: Dict[str, Any]) -> Dict[str, Any]:
