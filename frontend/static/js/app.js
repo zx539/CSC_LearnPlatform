@@ -18,6 +18,7 @@ const state = {
   tutorMemory: [],
   userCenter: null,
   avatarVersion: "",
+  nickname: "",
 };
 let mermaidIdSeed = 0;
 let mermaidRenderQueue = Promise.resolve();
@@ -64,6 +65,10 @@ function setUserCenterStatus(text) {
   const el = byId("userCenterStatus");
   if (!el) return;
   el.textContent = text;
+}
+
+function getDisplayName() {
+  return state.nickname || byId("userDisplayName")?.textContent?.trim() || "anonymous";
 }
 
 function normalizeQuestionType(question = {}) {
@@ -673,6 +678,11 @@ function renderProjectOptions(runs) {
         <div class="history-main">
           <div class="title">${escapeHtml(item.course || "未命名课程")} · ${escapeHtml(item.topic || "未命名主题")}</div>
           <div class="meta">创建时间：${escapeHtml(item.created_at || item.run_name || "")}</div>
+          ${
+            item.shared_by && (item.shared_by.nickname || item.shared_by.username)
+              ? `<div class="meta">来源：${escapeHtml(item.shared_by.nickname || item.shared_by.username)} 的分享文件</div>`
+              : ""
+          }
         </div>
         <button class="btn-light project-delete-btn" data-delete-run="${item.run_name}" type="button">删除</button>
       </article>`,
@@ -921,7 +931,7 @@ function clearResultPanels() {
 }
 
 function getTutorMemoryStorageKey() {
-  const userName = document.querySelector(".user-name-text")?.textContent?.trim() || "anonymous";
+  const userName = getDisplayName();
   return `tutor-memory:${userName}`;
 }
 
@@ -1067,11 +1077,21 @@ async function loadProjects() {
 
 function renderUserCenter(data) {
   state.userCenter = data || {};
+  state.nickname = String(state.userCenter.nickname || "").trim();
   state.avatarVersion = state.userCenter.avatar_updated_at || String(Date.now());
+  const displayNameEl = byId("userDisplayName");
+  if (displayNameEl) {
+    displayNameEl.textContent = state.nickname || state.userCenter.username || displayNameEl.textContent || "用户";
+  }
+  const nicknameInput = byId("nicknameInput");
+  if (nicknameInput) {
+    nicknameInput.value = state.nickname;
+  }
   const summaryEl = byId("userCenterSummary");
   if (!summaryEl) return;
   const summary = [
     `用户名：${state.userCenter.username || "-"}`,
+    `昵称：${state.nickname || "-"}`,
     `项目数量：${state.userCenter.project_count || 0}`,
     `最新项目：${state.userCenter.latest_run_name || "暂无"}`,
     `注册时间：${state.userCenter.created_at || "-"}`,
@@ -1180,6 +1200,30 @@ async function saveSecurityQuestions() {
   }
 }
 
+async function saveNickname() {
+  const nickname = byId("nicknameInput").value.trim();
+  if (!nickname) {
+    setUserCenterStatus("昵称不能为空。");
+    return;
+  }
+  setUserCenterStatus("正在保存昵称...");
+  try {
+    const resp = await fetch("/api/user/nickname", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nickname }),
+    });
+    const data = await readApiResponse(resp);
+    if (!resp.ok) throw new Error(data.error || "保存昵称失败");
+    state.nickname = nickname;
+    byId("userDisplayName").textContent = nickname;
+    setUserCenterStatus("昵称已更新。");
+    await loadUserCenter();
+  } catch (err) {
+    setUserCenterStatus(`昵称保存失败：${err.message}`);
+  }
+}
+
 function triggerAvatarUpload() {
   byId("avatarUploadInput").click();
 }
@@ -1275,6 +1319,93 @@ async function chooseExistingProject() {
     setStatus("已加载进度问卷，请先提交学习进度。");
   }
   setProjectStatus(`已进入学习项目：${runName}`);
+}
+
+async function exportShareFile() {
+  if (!state.selectedRunName) {
+    setProjectStatus("请先选择要分享的学习项目。");
+    return;
+  }
+  setProjectStatus(`正在导出分享文件：${state.selectedRunName} ...`);
+  try {
+    const runName = state.selectedRunName;
+    const resp = await fetch(`/api/share/export/${encodeURIComponent(runName)}`);
+    if (!resp.ok) {
+      const data = await readApiResponse(resp);
+      throw new Error(data.error || "导出分享文件失败");
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${runName}_share.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setProjectStatus("分享文件已下载，可发送给其他用户导入。");
+  } catch (err) {
+    setProjectStatus(`导出失败：${err.message}`);
+  }
+}
+
+function triggerImportShareFile() {
+  byId("importShareInput").click();
+}
+
+async function onImportShareFileChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  setProjectStatus("正在导入分享文件...");
+  try {
+    const text = await file.text();
+    const sharePayload = JSON.parse(text);
+    const resp = await fetch("/api/share/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ share_payload: sharePayload }),
+    });
+    const data = await readApiResponse(resp);
+    if (!resp.ok) throw new Error(data.error || "导入分享文件失败");
+    await loadProjects();
+    state.selectedRunName = data.run_name || state.selectedRunName;
+    renderProjectOptions(state.runs);
+    const fromName = data.shared_by?.nickname || data.shared_by?.username || "其他用户";
+    setProjectStatus(`导入成功：${data.run_name}（分享者：${fromName}）`);
+  } catch (err) {
+    setProjectStatus(`导入失败：${err.message}`);
+  } finally {
+    event.target.value = "";
+  }
+}
+
+async function downloadRunDocument(format) {
+  if (!state.selectedRunName) {
+    setStatus("请先选择学习项目再导出文档。");
+    return;
+  }
+  const ext = format === "docx" ? "docx" : "pdf";
+  const actionText = ext === "docx" ? "Word" : "PDF";
+  setStatus(`正在导出 ${actionText} ...`);
+  try {
+    const resp = await fetch(`/api/user/run/${encodeURIComponent(state.selectedRunName)}/document?format=${ext}`);
+    if (!resp.ok) {
+      const data = await readApiResponse(resp);
+      throw new Error(data.error || `导出${actionText}失败`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${state.selectedRunName}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus(`${actionText} 已下载到本地。`);
+  } catch (err) {
+    setStatus(`导出失败：${err.message}`);
+  }
 }
 
 function chooseNewProject() {
@@ -1619,6 +1750,12 @@ async function boot() {
   byId("closeSecurityQuestionModalBtn").addEventListener("click", () => closeModal("securityQuestionModal"));
   byId("submitChangePasswordBtn").addEventListener("click", changePassword);
   byId("saveSecurityQuestionsBtn").addEventListener("click", saveSecurityQuestions);
+  byId("saveNicknameBtn").addEventListener("click", saveNickname);
+  byId("exportShareBtn").addEventListener("click", exportShareFile);
+  byId("importShareBtn").addEventListener("click", triggerImportShareFile);
+  byId("importShareInput").addEventListener("change", onImportShareFileChange);
+  byId("downloadDocxBtn").addEventListener("click", () => downloadRunDocument("docx"));
+  byId("downloadPdfBtn").addEventListener("click", () => downloadRunDocument("pdf"));
   setFormMode("progress");
   try {
     restoreTutorMemory();
@@ -1631,6 +1768,11 @@ async function boot() {
 
   setStep("project");
   refreshUserAvatar();
+  try {
+    await loadUserCenter();
+  } catch (_) {
+    // 页面初始化时不阻断主流程，用户中心可手动打开重试
+  }
   try {
     await loadProjects();
     setProjectStatus("请选择已有项目或新建学习项目。");

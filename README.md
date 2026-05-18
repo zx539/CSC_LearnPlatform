@@ -63,6 +63,9 @@
 - 智能辅导升级为可拖拽、可隐藏、可最小化的悬浮助手（脱离标签页）
 - 智能辅导新增会话记忆与“清除记忆”功能
 - Markdown 渲染增强：表格滚动优化、代码块高亮（highlight.js）、数学公式（KaTeX）、结构化导图（Markdown 大纲）
+- 新增学习项目分享：可将项目导出为分享文件并由其他用户导入，导入后可看到分享者昵称
+- 新增昵称功能：可在用户中心设置昵称（用于页面展示与分享文件标识）
+- 新增侧边栏文档导出：可将拼接后的 MD 内容渲染并下载为 PDF 或 Word（docx）
 
 ### 2.3 登录与数据保存机制
 
@@ -71,7 +74,7 @@
   - 用户不存在：自动注册并创建专属用户目录
   - 用户存在：校验密码后登录
 - 支持“忘记密码”：可通过 3 个密保问题校验后重置密码
-- 支持“用户中心”：可修改密码、设置/更新密保问题
+- 支持“用户中心”：可修改密码、设置/更新密保问题、设置昵称
 - 登录后先选择学习项目：选择“已有项目”进入进度填写，选择“新建项目”进入学习方案生成
 - 所有使用数据均以 JSON 保存在独立用户数据目录（默认：仓库同级目录 `../csc_learnplatform_user_data/<username>/`；可通过环境变量 `USER_DATA_DIR` 覆盖）
 - 不同用户数据完全隔离
@@ -244,12 +247,16 @@ python3 materials/http_demo.py \
 
 - `GET /api/user/profile`：返回当前用户、历史任务列表、最新报告
 - `GET /api/user/center`：返回用户中心摘要（账号时间、项目数量、密保状态）
+- `POST /api/user/nickname`：登录态下设置昵称（分享文件会展示该昵称）
 - `POST /api/user/change-password`：登录态下修改密码（需当前密码）
 - `POST /api/user/security-questions`：登录态下设置/更新 3 个密保问题
 - `POST /api/auth/security-questions`：根据用户名获取密保问题（用于忘记密码）
 - `POST /api/auth/reset-password`：回答密保问题后重置密码
 - `GET /api/projects`：返回可选学习项目（已有 run 列表）
 - `GET /api/user/run/<run_name>`：返回指定历史任务完整 JSON
+- `GET /api/user/run/<run_name>/document?format=pdf|docx`：下载当前项目拼接后的 Markdown 文档
+- `GET /api/share/export/<run_name>`：导出学习项目分享文件（JSON）
+- `POST /api/share/import`：导入他人分享文件并创建新学习项目
 - `DELETE /api/user/run/<run_name>`：删除指定历史任务（历史索引、run 文件、对应进度日志）
 - `POST /api/progress/checkin`：提交问卷（`form_type=progress|test`）；仅 `test` 提交会更新下一次进度问卷
 

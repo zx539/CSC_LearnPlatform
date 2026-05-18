@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -281,6 +282,154 @@ def normalize_report_forms(report: dict) -> dict:
     return report
 
 
+def _safe_str(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _object_to_markdown(value: object, level: int = 0) -> str:
+    if value is None:
+        return "暂无"
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        if not value:
+            return "暂无"
+        lines: list[str] = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                lines.append(f"-\n{_object_to_markdown(item, level + 1)}")
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+    if isinstance(value, dict):
+        if not value:
+            return "暂无"
+        indent = "  " * max(0, level)
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                lines.append(f"{indent}- **{key}**:\n{_object_to_markdown(item, level + 1)}")
+            else:
+                lines.append(f"{indent}- **{key}**: {item}")
+        return "\n".join(lines)
+    return str(value)
+
+
+def _fallback_report_markdown(report_payload: dict) -> dict[str, str]:
+    report = report_payload if isinstance(report_payload, dict) else {}
+    resources = report.get("resources", {})
+    if not isinstance(resources, dict):
+        resources = {}
+    resources_md = []
+    for name, content in resources.items():
+        text = content if isinstance(content, str) else _object_to_markdown(content)
+        resources_md.append(f"### {name}\n\n{text}")
+    return {
+        "profile_md": f"## 学习画像\n\n{_object_to_markdown(report.get('profile', {}))}",
+        "learning_path_md": f"## 学习路径\n\n{_object_to_markdown(report.get('learning_path', {}))}",
+        "evaluation_md": f"## 学习评估\n\n{_object_to_markdown(report.get('evaluation', {'summary': '暂无学习评估。'}))}",
+        "resources_md": "## 学习资源\n\n" + ("\n\n".join(resources_md) if resources_md else "暂无学习资源。"),
+    }
+
+
+def _compose_report_markdown(report_payload: dict, report_markdown_payload: dict) -> str:
+    report_markdown = report_markdown_payload if isinstance(report_markdown_payload, dict) else {}
+    fallback = _fallback_report_markdown(report_payload)
+    resources_md = _safe_str(report_markdown.get("resources_md", ""))
+    if not resources_md:
+        resources = report_payload.get("resources", {}) if isinstance(report_payload, dict) else {}
+        if isinstance(resources, dict) and resources:
+            resource_sections = []
+            for name, content in resources.items():
+                text = content if isinstance(content, str) else _object_to_markdown(content)
+                resource_sections.append(f"### {name}\n\n{text}")
+            resources_md = "## 学习资源\n\n" + "\n\n".join(resource_sections)
+    return "\n\n".join(
+        [
+            _safe_str(report_markdown.get("profile_md", "")) or fallback["profile_md"],
+            resources_md or fallback["resources_md"],
+            _safe_str(report_markdown.get("learning_path_md", "")) or fallback["learning_path_md"],
+            _safe_str(report_markdown.get("evaluation_md", "")) or fallback["evaluation_md"],
+        ]
+    ).strip()
+
+
+def _markdown_to_docx_bytes(markdown_text: str) -> bytes:
+    from docx import Document
+
+    doc = Document()
+    in_code_block = False
+    for raw_line in str(markdown_text or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            doc.add_paragraph(line, style="Intense Quote")
+            continue
+        heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if heading_match:
+            level = min(4, len(heading_match.group(1)))
+            doc.add_heading(heading_match.group(2).strip(), level=level)
+            continue
+        if re.match(r"^\d+\.\s+", stripped):
+            doc.add_paragraph(re.sub(r"^\d+\.\s+", "", stripped), style="List Number")
+            continue
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            doc.add_paragraph(stripped[2:].strip(), style="List Bullet")
+            continue
+        doc.add_paragraph(line)
+    buff = BytesIO()
+    doc.save(buff)
+    return buff.getvalue()
+
+
+def _markdown_to_pdf_bytes(markdown_text: str) -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer
+
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    styles = getSampleStyleSheet()
+    for style_name in ("BodyText", "Heading1", "Heading2", "Heading3", "Code"):
+        if style_name in styles:
+            styles[style_name].fontName = "STSong-Light"
+    story = []
+    in_code_block = False
+    for raw_line in str(markdown_text or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            story.append(Spacer(1, 4))
+            continue
+        if in_code_block:
+            story.append(Preformatted(line, styles["Code"]))
+            continue
+        heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if heading_match:
+            level = min(3, len(heading_match.group(1)))
+            style_name = f"Heading{level}" if level > 0 else "Heading1"
+            story.append(Paragraph(heading_match.group(2).strip(), styles[style_name]))
+            story.append(Spacer(1, 6))
+            continue
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            story.append(Paragraph(f"• {stripped[2:].strip()}", styles["BodyText"]))
+            continue
+        if re.match(r"^\d+\.\s+", stripped):
+            story.append(Paragraph(stripped, styles["BodyText"]))
+            continue
+        story.append(Paragraph(stripped if stripped else "&nbsp;", styles["BodyText"]))
+    buff = BytesIO()
+    doc = SimpleDocTemplate(buff, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
+    doc.build(story)
+    return buff.getvalue()
+
+
 @app.get("/login")
 def login_page():
     if get_login_user():
@@ -488,9 +637,11 @@ def user_profile():
     if err:
         return err
 
+    profile = user_store.get_display_profile(username)
     return jsonify(
         {
-            "username": username,
+            "username": profile["username"],
+            "nickname": profile["nickname"],
             "runs": user_store.list_runs(username),
             "latest": user_store.get_latest_report(username),
             "progress_logs": user_store.get_progress_logs(username, limit=10),
@@ -506,6 +657,24 @@ def user_center():
     center = user_store.get_user_center(username)
     center["avatar_url"] = "/api/user/avatar"
     return jsonify(center)
+
+
+@app.post("/api/user/nickname")
+def user_nickname():
+    username, err = require_login_json()
+    if err:
+        return err
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    nickname = str(payload.get("nickname", "")).strip()
+    if not nickname:
+        return jsonify({"error": "昵称不能为空"}), 400
+    try:
+        user_store.set_nickname(username, nickname)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"message": "昵称已更新", "nickname": nickname})
 
 
 @app.get("/api/user/avatar")
@@ -607,6 +776,44 @@ def user_run(run_name: str):
     return jsonify(payload)
 
 
+@app.get("/api/user/run/<run_name>/document")
+def download_run_document(run_name: str):
+    username, err = require_login_json()
+    if err:
+        return err
+    fmt = str(request.args.get("format", "pdf")).strip().lower()
+    if fmt not in {"pdf", "docx"}:
+        return jsonify({"error": "仅支持 pdf 或 docx"}), 400
+    payload = user_store.get_run(username, run_name)
+    if payload is None:
+        return jsonify({"error": "未找到该历史记录"}), 404
+    report = payload.get("report", {})
+    report_markdown = payload.get("report_markdown", {})
+    merged_markdown = _compose_report_markdown(report, report_markdown)
+    if not merged_markdown:
+        return jsonify({"error": "当前项目暂无可导出的学习内容"}), 400
+    now_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_run_name = re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fa5]", "_", run_name).strip("_") or "learning_project"
+    try:
+        if fmt == "docx":
+            data = _markdown_to_docx_bytes(merged_markdown)
+            return send_file(
+                BytesIO(data),
+                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                as_attachment=True,
+                download_name=f"{safe_run_name}_{now_tag}.docx",
+            )
+        data = _markdown_to_pdf_bytes(merged_markdown)
+        return send_file(
+            BytesIO(data),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"{safe_run_name}_{now_tag}.pdf",
+        )
+    except ModuleNotFoundError:
+        return jsonify({"error": "导出依赖未安装，请先安装 requirements.txt"}), 500
+
+
 @app.delete("/api/user/run/<run_name>")
 def delete_user_run(run_name: str):
     username, err = require_login_json()
@@ -618,6 +825,92 @@ def delete_user_run(run_name: str):
         return jsonify({"error": "未找到该历史记录"}), 404
 
     return jsonify({"message": "历史记录已删除", "run_name": run_name})
+
+
+@app.get("/api/share/export/<run_name>")
+def export_run_share_file(run_name: str):
+    username, err = require_login_json()
+    if err:
+        return err
+    payload = user_store.get_run(username, run_name)
+    if payload is None:
+        return jsonify({"error": "未找到该历史记录"}), 404
+    profile = user_store.get_display_profile(username)
+    share_payload = {
+        "format": "csc_learnplatform_share_v1",
+        "shared_at": _utc_now_iso(),
+        "shared_by": profile,
+        "project": {
+            "source_run_name": run_name,
+            "run_payload": payload,
+        },
+    }
+    data = json.dumps(share_payload, ensure_ascii=False, indent=2).encode("utf-8")
+    safe_run_name = re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fa5]", "_", run_name).strip("_") or "learning_project"
+    return send_file(
+        BytesIO(data),
+        mimetype="application/json",
+        as_attachment=True,
+        download_name=f"{safe_run_name}_share.json",
+    )
+
+
+@app.post("/api/share/import")
+def import_run_share_file():
+    username, err = require_login_json()
+    if err:
+        return err
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({"error": "请求体必须是JSON"}), 400
+    share_payload = payload.get("share_payload")
+    if not isinstance(share_payload, dict):
+        return jsonify({"error": "share_payload 必须是对象类型"}), 400
+    if str(share_payload.get("format", "")).strip() != "csc_learnplatform_share_v1":
+        return jsonify({"error": "分享文件格式不正确"}), 400
+    project_payload = share_payload.get("project", {})
+    if not isinstance(project_payload, dict):
+        return jsonify({"error": "分享文件缺少 project 信息"}), 400
+    run_payload = project_payload.get("run_payload", {})
+    if not isinstance(run_payload, dict):
+        return jsonify({"error": "分享文件缺少 run_payload"}), 400
+    request_payload = run_payload.get("request", {})
+    report = run_payload.get("report", {})
+    report_markdown = run_payload.get("report_markdown", {})
+    if not isinstance(request_payload, dict) or not isinstance(report, dict):
+        return jsonify({"error": "分享文件中的项目数据不完整"}), 400
+    if not isinstance(report_markdown, dict):
+        report_markdown = {}
+    source_run_name = str(project_payload.get("source_run_name", "")).strip() or str(run_payload.get("run_name", "")).strip()
+    base_name = datetime.now().strftime("run_share_%Y%m%d_%H%M%S")
+    run_name = base_name
+    suffix = 1
+    while user_store.get_run(username, run_name) is not None:
+        suffix += 1
+        run_name = f"{base_name}_{suffix}"
+    shared_by_payload = share_payload.get("shared_by", {})
+    shared_by = {
+        "username": str(shared_by_payload.get("username", "")).strip(),
+        "nickname": str(shared_by_payload.get("nickname", "")).strip(),
+    }
+    user_store.save_run(
+        username=username,
+        run_name=run_name,
+        request_payload=request_payload,
+        report=report,
+        output_dir="",
+        report_markdown=report_markdown,
+        shared_by=shared_by,
+        source_run_name=source_run_name,
+    )
+    return jsonify(
+        {
+            "message": "分享项目已导入",
+            "run_name": run_name,
+            "shared_by": shared_by,
+            "source_run_name": source_run_name,
+        }
+    )
 
 
 @app.post("/api/progress/checkin")

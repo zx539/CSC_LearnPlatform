@@ -88,6 +88,13 @@ class UserStore:
         if len(password) < 6:
             raise ValueError("密码长度至少为6位")
 
+    def _validate_nickname(self, nickname: str):
+        normalized = str(nickname or "").strip()
+        if not normalized:
+            raise ValueError("昵称不能为空")
+        if len(normalized) > 24:
+            raise ValueError("昵称最多24个字符")
+
     def _normalize_security_qa(self, questions: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         if len(questions) != 3:
             raise ValueError("必须设置3个密保问题")
@@ -129,6 +136,7 @@ class UserStore:
             self._validate_password(password)
             payload = {
                 "username": username,
+                "nickname": username,
                 "password_hash": generate_password_hash(password),
                 "security_questions": [],
                 "created_at": _utc_now(),
@@ -149,9 +157,20 @@ class UserStore:
         report: Dict[str, Any],
         output_dir: str,
         report_markdown: Dict[str, str] | None = None,
+        shared_by: Dict[str, str] | None = None,
+        source_run_name: str = "",
     ):
         self._ensure_user_migrated(username)
         created_at = _utc_now()
+        shared_info: Dict[str, str] = {}
+        if isinstance(shared_by, dict):
+            shared_username = str(shared_by.get("username", "")).strip()
+            shared_nickname = str(shared_by.get("nickname", "")).strip()
+            if shared_username or shared_nickname:
+                shared_info = {
+                    "username": shared_username,
+                    "nickname": shared_nickname,
+                }
         run_payload = {
             "run_name": run_name,
             "created_at": created_at,
@@ -159,21 +178,24 @@ class UserStore:
             "output_dir": output_dir,
             "report": report,
             "report_markdown": report_markdown or {},
+            "source_run_name": str(source_run_name or "").strip(),
         }
+        if shared_info:
+            run_payload["shared_by"] = shared_info
         self._write_json(self._run_file(username, run_name), run_payload)
         self._write_json(self._latest_file(username), {"run_name": run_name, "updated_at": created_at})
 
         history = self._read_json(self._history_file(username), [])
-        history.insert(
-            0,
-            {
-                "run_name": run_name,
-                "created_at": created_at,
-                "course": request_payload.get("course", ""),
-                "topic": request_payload.get("topic", ""),
-                "output_dir": output_dir,
-            },
-        )
+        history_item = {
+            "run_name": run_name,
+            "created_at": created_at,
+            "course": request_payload.get("course", ""),
+            "topic": request_payload.get("topic", ""),
+            "output_dir": output_dir,
+        }
+        if shared_info:
+            history_item["shared_by"] = shared_info
+        history.insert(0, history_item)
         self._write_json(self._history_file(username), history[:100])
 
     def _resolve_latest_run_name(self, username: str) -> str:
@@ -301,8 +323,11 @@ class UserStore:
                 if name:
                     project_names.append(name)
         avatar_file = str(user.get("avatar_file", "")).strip()
+        user_username = str(user.get("username", username)).strip() or username
+        nickname = str(user.get("nickname", "")).strip() or user_username
         return {
-            "username": user.get("username", username),
+            "username": user_username,
+            "nickname": nickname,
             "created_at": user.get("created_at", ""),
             "updated_at": user.get("updated_at", ""),
             "project_count": len(history) if isinstance(history, list) else 0,
@@ -313,6 +338,24 @@ class UserStore:
             "has_avatar": bool(avatar_file),
             "avatar_updated_at": user.get("avatar_updated_at", ""),
         }
+
+    def get_display_profile(self, username: str) -> Dict[str, str]:
+        self._ensure_user_migrated(username)
+        user = self._read_json(self._user_file(username), {})
+        account = str(user.get("username", username)).strip() or username
+        nickname = str(user.get("nickname", "")).strip() or account
+        return {"username": account, "nickname": nickname}
+
+    def set_nickname(self, username: str, nickname: str):
+        self._ensure_user_migrated(username)
+        self._validate_nickname(nickname)
+        user_file = self._user_file(username)
+        user = self._read_json(user_file, None)
+        if not isinstance(user, dict):
+            raise ValueError("用户不存在")
+        user["nickname"] = str(nickname).strip()
+        user["updated_at"] = _utc_now()
+        self._write_json(user_file, user)
 
     def get_security_questions(self, username: str) -> List[str]:
         self._ensure_user_migrated(username)

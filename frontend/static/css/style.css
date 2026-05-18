@@ -412,6 +412,11 @@ textarea:focus {
   border-color: transparent;
 }
 
+.side-nav-action {
+  background: #eef4ff;
+  color: #36539f;
+}
+
 .panel {
   display: none;
   margin-top: 14px;

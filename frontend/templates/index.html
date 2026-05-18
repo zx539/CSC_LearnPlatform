@@ -18,7 +18,7 @@
         <button id="avatarEntryBtn" class="user-avatar-btn" type="button" title="点击进入用户中心">
           <img id="userAvatarImg" class="user-avatar-img hidden-by-gate" alt="用户头像" />
           <span id="userAvatarFallback" class="user-avatar-fallback">👤</span>
-          <span class="user-name-text">{{ username }}</span>
+          <span id="userDisplayName" class="user-name-text">{{ username }}</span>
         </button>
         <a class="logout-link" href="/logout">退出登录</a>
       </div>
@@ -36,6 +36,9 @@
           <div class="actions">
             <button id="chooseExistingBtn" class="btn-secondary">进入已选学习项目</button>
             <button id="chooseNewBtn" class="btn-primary">新建学习项目</button>
+            <button id="exportShareBtn" class="btn-light" type="button">📤 导出分享文件</button>
+            <button id="importShareBtn" class="btn-light" type="button">📥 导入分享文件</button>
+            <input id="importShareInput" type="file" accept=".json,application/json" class="hidden-by-gate" />
             <span id="projectStatus" class="status">请先选择学习项目</span>
           </div>
         </section>
@@ -98,6 +101,8 @@
           </div>
           <div class="result-shell">
             <nav id="resultTabs" class="side-nav">
+              <button id="downloadDocxBtn" class="side-nav-item side-nav-action" type="button">⬇ 导出 Word</button>
+              <button id="downloadPdfBtn" class="side-nav-item side-nav-action" type="button">⬇ 导出 PDF</button>
               <button class="side-nav-item active" data-tab="profile">学习画像</button>
               <button class="side-nav-item" data-tab="resources_panel">学习资源</button>
               <button class="side-nav-item" data-tab="path">学习路径</button>
@@ -128,6 +133,16 @@
         <button id="openSecurityQuestionModalBtn" class="btn-primary" type="button">设置密保问题</button>
         <input id="avatarUploadInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden-by-gate" />
       </div>
+      <section class="user-center-projects">
+        <h4>昵称设置</h4>
+        <label>
+          昵称（分享文件会展示该昵称）
+          <input id="nicknameInput" maxlength="24" placeholder="请输入昵称" />
+        </label>
+        <div class="actions">
+          <button id="saveNicknameBtn" class="btn-primary" type="button">保存昵称</button>
+        </div>
+      </section>
       <div id="userCenterSummary" class="muted-text">正在加载用户信息...</div>
       <section class="user-center-projects">
         <h4>学习项目</h4>
